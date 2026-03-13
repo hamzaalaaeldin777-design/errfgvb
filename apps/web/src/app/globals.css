@@ -1,0 +1,107 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --background: #edf2ff;
+  --foreground: #071220;
+  --muted: #5f718b;
+  --panel: rgba(255, 255, 255, 0.72);
+  --panel-strong: rgba(255, 255, 255, 0.92);
+  --panel-border: rgba(15, 23, 42, 0.08);
+  --brand: #6ee7ff;
+  --brand-deep: #0ea5e9;
+  --success: #34d399;
+}
+
+.dark {
+  --background: #050d18;
+  --foreground: #f2f8ff;
+  --muted: #8ba2be;
+  --panel: rgba(8, 17, 31, 0.78);
+  --panel-strong: rgba(8, 17, 31, 0.94);
+  --panel-border: rgba(148, 163, 184, 0.14);
+  --brand: #67e8f9;
+  --brand-deep: #38bdf8;
+  --success: #22c55e;
+}
+
+@theme inline {
+  --font-sans: var(--font-space);
+  --font-mono: var(--font-plex-mono);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top left, rgba(14, 165, 233, 0.22), transparent 36%),
+    radial-gradient(circle at top right, rgba(103, 232, 249, 0.16), transparent 28%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(228, 236, 255, 0.96));
+  color: var(--foreground);
+  font-family: var(--font-space), sans-serif;
+}
+
+.dark body {
+  background:
+    radial-gradient(circle at top left, rgba(14, 165, 233, 0.16), transparent 38%),
+    radial-gradient(circle at top right, rgba(8, 145, 178, 0.18), transparent 32%),
+    linear-gradient(180deg, rgba(3, 10, 18, 1), rgba(6, 15, 27, 0.96));
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(148, 163, 184, 0.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.07) 1px, transparent 1px);
+  background-size: 72px 72px;
+  mask-image: radial-gradient(circle at center, black 40%, transparent 92%);
+  opacity: 0.55;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.12);
+  backdrop-filter: blur(22px);
+}
+
+.panel-strong {
+  background: var(--panel-strong);
+  border: 1px solid var(--panel-border);
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.14);
+  backdrop-filter: blur(22px);
+}
+
+.eyebrow {
+  color: var(--brand-deep);
+  font-size: 0.73rem;
+  font-weight: 700;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+}
+
+.mono {
+  font-family: var(--font-plex-mono), monospace;
+}
+
+.glow-border {
+  position: relative;
+}
+
+.glow-border::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  background: linear-gradient(135deg, rgba(103, 232, 249, 0.55), transparent 48%, rgba(56, 189, 248, 0.35));
+  opacity: 0.55;
+  z-index: -1;
+  filter: blur(12px);
+}

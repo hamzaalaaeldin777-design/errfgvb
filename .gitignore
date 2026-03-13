@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.next/
+.env
+*.log
+.codex-runtime/
+.vercel/
+__pycache__/
+.pytest_cache/
+.venv/
+apps/*/node_modules/
+apps/*/dist/
+apps/*/.next/
+apps/*/.turbo/
+coverage/
