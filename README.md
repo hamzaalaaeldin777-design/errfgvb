@@ -227,6 +227,34 @@ ENABLE_PLAYWRIGHT_FALLBACK=true
 SPORTS=
 ```
 
+### Railway worker setup
+
+Railway's monorepo docs recommend setting a root directory for isolated monorepos, and Railway's Dockerfile docs state that a `Dockerfile` at the root of the source directory is used automatically. For this repo, that means:
+
+- Connect the GitHub repo to Railway
+- Create a service from the repo
+- Set the service Root Directory to `apps/worker`
+- Let Railway build from the `Dockerfile` already in that directory
+
+Worker variables on Railway:
+
+```env
+DATABASE_URL=postgresql://same-database-used-by-api
+REQUEST_TIMEOUT_SECONDS=20
+REQUEST_THROTTLE_SECONDS=3
+FETCH_INTERVAL_SECONDS=10
+ENABLE_PLAYWRIGHT_FALLBACK=true
+SPORTS=
+PYTHONIOENCODING=utf-8
+```
+
+Recommended Railway add-ons:
+
+- PostgreSQL
+- Redis if you also choose to host the API on Railway instead of Vercel
+
+If you want automatic redeploys, Railway's GitHub autodeploy docs note that services linked to a GitHub repo deploy automatically when new commits hit the connected branch.
+
 ### 4. Point CORS back to the web deployment
 
 Make sure the API project's `FRONTEND_URL` matches your Vercel frontend domain exactly, for example:
