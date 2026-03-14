@@ -20,6 +20,41 @@ app.use(
 app.use(helmet());
 app.use(express.json());
 app.use(morgan("dev"));
+
+app.get("/", (_req, res) => {
+  res.json({
+    name: "SportStack API",
+    version: "1.0.0",
+    docs: "/api/leagues",
+    health: "/health",
+  });
+});
+
+app.get("/health", async (_req, res) => {
+  const liveSnapshot = await loadLiveSnapshotMeta();
+
+  try {
+    await ensureRuntime();
+
+    return res.json({
+      status: "ok",
+      service: "sportstack-api",
+      timestamp: new Date().toISOString(),
+      live_snapshot: liveSnapshot,
+    });
+  } catch (error) {
+    console.error("Health check runtime failure", error);
+
+    return res.status(503).json({
+      status: "degraded",
+      service: "sportstack-api",
+      timestamp: new Date().toISOString(),
+      error: error instanceof Error ? error.message : "Runtime initialization failed.",
+      live_snapshot: liveSnapshot,
+    });
+  }
+});
+
 app.use(async (_req, _res, next) => {
   try {
     await ensureRuntime();
@@ -27,25 +62,6 @@ app.use(async (_req, _res, next) => {
   } catch (error) {
     next(error);
   }
-});
-
-app.get("/health", async (_req, res) => {
-  const liveSnapshot = await loadLiveSnapshotMeta();
-
-  res.json({
-    status: "ok",
-    service: "sportstack-api",
-    timestamp: new Date().toISOString(),
-    live_snapshot: liveSnapshot,
-  });
-});
-
-app.get("/", (_req, res) => {
-  res.json({
-    name: "SportStack API",
-    version: "1.0.0",
-    docs: "/api/leagues",
-  });
 });
 
 app.use("/auth", authRouter);
