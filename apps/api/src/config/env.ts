@@ -14,6 +14,8 @@ const envSchema = z.object({
     .string()
     .default("postgresql://postgres:postgres@localhost:5432/sportsstack"),
   REDIS_URL: z.string().default("redis://localhost:6379"),
+  UPSTASH_REDIS_REST_URL: z.string().optional(),
+  UPSTASH_REDIS_REST_TOKEN: z.string().optional(),
   JWT_SECRET: z.string().default("super-secret-development-jwt"),
   FRONTEND_URL: z.string().default("http://localhost:3000"),
   SPORTS_SOURCE_API_KEY: z.string().default("123"),

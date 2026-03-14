@@ -6,6 +6,14 @@ type MemoryValue = {
   expiresAt: number | null;
 };
 
+type RedisLikeClient = {
+  isOpen: boolean;
+  on: (event: string, listener: (error: unknown) => void) => void;
+  connect: () => Promise<unknown>;
+  incr: (key: string) => Promise<number>;
+  expire: (key: string, seconds: number) => Promise<number>;
+};
+
 function createMemoryRedis() {
   const store = new Map<string, MemoryValue>();
 
@@ -44,11 +52,67 @@ function createMemoryRedis() {
   };
 }
 
-export const redis = env.REDIS_URL.startsWith("memory://")
-  ? createMemoryRedis()
-  : createClient({
-      url: env.REDIS_URL,
+function createUpstashRestRedis(): RedisLikeClient {
+  const baseUrl = env.UPSTASH_REDIS_REST_URL;
+  const token = env.UPSTASH_REDIS_REST_TOKEN;
+
+  if (!baseUrl || !token) {
+    throw new Error("Missing Upstash REST credentials.");
+  }
+
+  const execute = async (...segments: Array<string | number>) => {
+    const encodedPath = segments.map((segment) =>
+      encodeURIComponent(String(segment)),
+    );
+    const response = await fetch(`${baseUrl}/${encodedPath.join("/")}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
     });
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(
+        `Upstash request failed with ${response.status}: ${body || response.statusText}`,
+      );
+    }
+
+    const payload = (await response.json()) as {
+      error?: string;
+      result?: number;
+    };
+
+    if (payload.error) {
+      throw new Error(payload.error);
+    }
+
+    return typeof payload.result === "number" ? payload.result : 0;
+  };
+
+  return {
+    isOpen: true,
+    on: () => undefined,
+    connect: async () => undefined,
+    incr: (key: string) => execute("incr", key),
+    expire: (key: string, seconds: number) => execute("expire", key, seconds),
+  };
+}
+
+function createRedisClient(): RedisLikeClient {
+  if (env.UPSTASH_REDIS_REST_URL && env.UPSTASH_REDIS_REST_TOKEN) {
+    return createUpstashRestRedis();
+  }
+
+  if (env.REDIS_URL.startsWith("memory://")) {
+    return createMemoryRedis();
+  }
+
+  return createClient({
+    url: env.REDIS_URL,
+  });
+}
+
+export const redis = createRedisClient();
 
 redis.on("error", (error) => {
   console.error("Redis connection error", error);

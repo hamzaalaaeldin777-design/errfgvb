@@ -219,9 +219,13 @@ Set:
 ```env
 DATABASE_URL=postgresql://...
 REDIS_URL=redis://...
+UPSTASH_REDIS_REST_URL=https://...
+UPSTASH_REDIS_REST_TOKEN=...
 JWT_SECRET=replace-with-a-real-secret
 FRONTEND_URL=https://your-web-project.vercel.app
 ```
+
+If you are using Upstash on Vercel, you can skip `REDIS_URL` and set only `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`.
 
 Optional:
 
@@ -304,6 +308,8 @@ Create a `.env` file at the repository root or set variables per service:
 ```env
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/sportsstack
 REDIS_URL=redis://localhost:6379
+UPSTASH_REDIS_REST_URL=
+UPSTASH_REDIS_REST_TOKEN=
 JWT_SECRET=replace-with-a-secure-jwt-secret
 FRONTEND_URL=http://localhost:3000
 NEXT_PUBLIC_API_BASE_URL=http://localhost:4000
