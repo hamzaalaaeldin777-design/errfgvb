@@ -26,8 +26,20 @@ export const docsSources = [
     href: "https://www.api-football.com/documentation-v3",
   },
   {
-    label: "API-Football docs",
-    href: "https://www.api-football.com/documentation",
+    label: "API-Basketball docs",
+    href: "https://www.api-basketball.com/documentation",
+  },
+  {
+    label: "The Odds API v4",
+    href: "https://the-odds-api.com/liveapi/guides/v4/",
+  },
+  {
+    label: "Sportradar Soccer",
+    href: "https://developer.sportradar.com/soccer/reference/soccer-live-timelines",
+  },
+  {
+    label: "TheSportsDB",
+    href: "https://www.thesportsdb.com/api.php",
   },
 ];
 
@@ -57,15 +69,16 @@ export const authChecks = [
 
 export const platformNotes = [
   "Public REST endpoints require x-api-key. Dashboard and admin routes use JWT bearer tokens.",
-  "Every supported sport now flows through the same structured API surface: leagues, teams, players, fixtures, live fixtures, and standings.",
+  "Every supported sport now exposes countries, leagues, fixtures, H2H, livescore, standings, top scorers, teams, players, videos, odds, probabilities, live odds, live comments, and full odds.",
   "The worker refreshes a multi-sport catalog, throttles upstream requests to at most one every 3 seconds, and writes a shared snapshot consumed by the API while also syncing PostgreSQL when available.",
+  "Odds, probabilities, and comments prefer real upstream event detail when cached and fall back to normalized in-platform models when a sport or fixture does not expose the same depth as football.",
   "Response headers include x-ratelimit-limit and x-ratelimit-remaining for metered plans.",
 ];
 
 export const coverageNotes = [
-  "All listed sports now expose the same core endpoints for leagues, teams, players, fixtures, live fixtures, and standings.",
+  "All listed sports now expose the same core endpoint families, not just live fixtures.",
   "Structured responses are assembled from the worker snapshot in local demo mode and from PostgreSQL in production when the worker is connected to a real database.",
-  "Some upstream competitions still return sparse fields, so empty standings or short player lists can happen for event formats where SofaScore does not expose a richer table or roster.",
+  "Event-detail routes such as videos, comments, and real bookmaker odds warm up in the background and may fall back to normalized data when upstream coverage is sparse for a given sport or fixture.",
 ];
 
 export const multiSportCatalog = supportedSports;
@@ -105,6 +118,24 @@ export const implementedEndpoints: ImplementedEndpoint[] = [
   },
   {
     method: "GET",
+    path: "/api/countries?sport=basketball",
+    description: "Aggregate countries across leagues and fixtures for any supported sport.",
+    params: "sport, search",
+    response: `{
+  "success": true,
+  "count": 3,
+  "data": [
+    {
+      "name": "USA",
+      "sport_count": 4,
+      "league_count": 18,
+      "team_count": 210
+    }
+  ]
+}`,
+  },
+  {
+    method: "GET",
     path: "/api/leagues",
     description: "List structured competitions currently available across the supported sports catalog.",
     params: "sport, search",
@@ -120,6 +151,29 @@ export const implementedEndpoints: ImplementedEndpoint[] = [
       "country": "England",
       "season": "2025-2026",
       "logo_url": "https://media.api-sports.io/football/leagues/39.png"
+    }
+  ]
+}`,
+  },
+  {
+    method: "GET",
+    path: "/api/livescore?sport=ice-hockey&limit=20",
+    description: "Return the current live board using a livescore-style endpoint name.",
+    params: "sport, search, limit",
+    response: `{
+  "success": true,
+  "count": 15,
+  "data": [
+    {
+      "sport_slug": "ice-hockey",
+      "sport_name": "Ice Hockey",
+      "match_id": 15658355,
+      "league": "NHL",
+      "home_team": "New York Islanders",
+      "away_team": "Los Angeles Kings",
+      "score": "0-1",
+      "minute": 7,
+      "status": "1st period"
     }
   ]
 }`,
@@ -149,6 +203,27 @@ export const implementedEndpoints: ImplementedEndpoint[] = [
   },
   {
     method: "GET",
+    path: "/api/h2h?team1_id=1&team2_id=3&sport=football&limit=5",
+    description: "Return known head-to-head fixtures for two competitors.",
+    params: "team1_id, team2_id, sport, limit",
+    response: `{
+  "success": true,
+  "count": 2,
+  "data": [
+    {
+      "match_id": 1001,
+      "sport_slug": "football",
+      "league": "Premier League",
+      "home_team": "Liverpool",
+      "away_team": "Chelsea",
+      "score": "2-1",
+      "winner": "Liverpool"
+    }
+  ]
+}`,
+  },
+  {
+    method: "GET",
     path: "/api/players?team_id=1&sport=football",
     description: "Return players for a club or search across player names for every supported sport.",
     params: "team_id, sport, search",
@@ -165,6 +240,27 @@ export const implementedEndpoints: ImplementedEndpoint[] = [
       "team": "Liverpool",
       "sport_slug": "football",
       "sport_name": "Football"
+    }
+  ]
+}`,
+  },
+  {
+    method: "GET",
+    path: "/api/topscorers?sport=basketball&limit=10",
+    description: "Return a normalized scorer or top-performer leaderboard across sports.",
+    params: "sport, league_id, limit",
+    response: `{
+  "success": true,
+  "count": 10,
+  "data": [
+    {
+      "sport_slug": "basketball",
+      "league": "NBA",
+      "name": "Boston Celtics",
+      "entity_type": "team",
+      "scored": 640,
+      "played": 7,
+      "average_scored": 91.43
     }
   ]
 }`,
@@ -200,6 +296,25 @@ export const implementedEndpoints: ImplementedEndpoint[] = [
   },
   {
     method: "GET",
+    path: "/api/videos?fixture_id=15566255&sport=football",
+    description: "Return cached highlight or media links when upstream event media is available.",
+    params: "fixture_id, sport, search, limit",
+    response: `{
+  "success": true,
+  "count": 1,
+  "data": [
+    {
+      "fixture_id": 15566255,
+      "sport_slug": "football",
+      "title": "AS FAR 1 - 1 Pyramids",
+      "subtitle": "Full Highlights",
+      "url": "https://www.youtube.com/watch?v=fHig_6-a1gY"
+    }
+  ]
+}`,
+  },
+  {
+    method: "GET",
     path: "/api/fixtures/live?sport=basketball&limit=20",
     description: "Return the current live multi-sport board from the worker snapshot, filtered by sport or search text when needed.",
     params: "sport, search, limit",
@@ -228,6 +343,25 @@ export const implementedEndpoints: ImplementedEndpoint[] = [
   },
   {
     method: "GET",
+    path: "/api/comments/live?sport=football&limit=20",
+    description: "Return live commentary when available, otherwise a generated score update feed.",
+    params: "sport, fixture_id, limit",
+    response: `{
+  "success": true,
+  "count": 3,
+  "data": [
+    {
+      "fixture_id": 15566255,
+      "sport_slug": "football",
+      "type": "yellowCard",
+      "minute": 90,
+      "text": "Marwan Hamdy (Pyramids) is shown the yellow card for a bad foul."
+    }
+  ]
+}`,
+  },
+  {
+    method: "GET",
     path: "/api/standings?league_id=1&sport=football",
     description: "Return table rows ordered by position for a competition when the upstream tournament exposes standings data.",
     params: "league_id, sport",
@@ -249,6 +383,69 @@ export const implementedEndpoints: ImplementedEndpoint[] = [
       "points": 67,
       "form": "WWDWW",
       "league": "Premier League"
+    }
+  ]
+}`,
+  },
+  {
+    method: "GET",
+    path: "/api/probabilities?fixture_id=15566255&sport=football",
+    description: "Return match winner probabilities using upstream odds when available and an internal model otherwise.",
+    params: "fixture_id, sport, limit",
+    response: `{
+  "success": true,
+  "count": 1,
+  "data": [
+    {
+      "fixture_id": 15566255,
+      "sport_slug": "football",
+      "market": "Full time",
+      "source": "upstream_odds",
+      "home_probability": 0.36,
+      "draw_probability": 0.31,
+      "away_probability": 0.33
+    }
+  ]
+}`,
+  },
+  {
+    method: "GET",
+    path: "/api/odds/live?sport=basketball&limit=10",
+    description: "Return live in-play odds, with model-generated markets when no cached bookmaker feed is available yet.",
+    params: "sport, fixture_id, limit",
+    response: `{
+  "success": true,
+  "count": 2,
+  "data": [
+    {
+      "fixture_id": 15546550,
+      "sport_slug": "basketball",
+      "market_name": "Winner",
+      "is_live": true,
+      "source": "model"
+    }
+  ]
+}`,
+  },
+  {
+    method: "GET",
+    path: "/api/odds/full?fixture_id=15566255&sport=football",
+    description: "Return the full market set for a fixture, including 1X2 and totals style markets.",
+    params: "fixture_id, sport, limit",
+    response: `{
+  "success": true,
+  "count": 3,
+  "data": [
+    {
+      "fixture_id": 15566255,
+      "sport_slug": "football",
+      "market_name": "Full time",
+      "market_group": "1X2",
+      "choices": [
+        { "name": "1", "decimal_value": 2.63 },
+        { "name": "X", "decimal_value": 3.23 },
+        { "name": "2", "decimal_value": 3.03 }
+      ]
     }
   ]
 }`,

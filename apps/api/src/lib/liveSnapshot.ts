@@ -114,6 +114,82 @@ const liveSnapshotStandingSchema = z.object({
   league: z.string(),
 });
 
+const liveSnapshotCommentSchema = z.object({
+  source_id: z.string(),
+  fixture_id: z.number(),
+  sport_slug: z.string(),
+  sport_name: z.string(),
+  league: z.string(),
+  home_team: z.string(),
+  away_team: z.string(),
+  is_live: z.boolean(),
+  sequence: z.number(),
+  minute: z.number().nullable().optional(),
+  type: z.string(),
+  text: z.string(),
+  is_home: z.boolean().nullable().optional(),
+  player: z.string().nullable().optional(),
+});
+
+const liveSnapshotVideoSchema = z.object({
+  source_id: z.string(),
+  fixture_id: z.number(),
+  sport_slug: z.string(),
+  sport_name: z.string(),
+  league: z.string(),
+  home_team: z.string(),
+  away_team: z.string(),
+  title: z.string(),
+  subtitle: z.string().nullable().optional(),
+  url: z.string().nullable().optional(),
+  thumbnail_url: z.string().nullable().optional(),
+  media_type: z.string().nullable().optional(),
+  published_at: z.string().nullable().optional(),
+  is_highlight: z.boolean(),
+});
+
+const liveSnapshotOddsChoiceSchema = z.object({
+  name: z.string(),
+  fractional_value: z.string().nullable().optional(),
+  decimal_value: z.number().nullable().optional(),
+  probability: z.number().nullable().optional(),
+  winning: z.boolean().nullable().optional(),
+});
+
+const liveSnapshotOddsSchema = z.object({
+  source_id: z.string(),
+  fixture_id: z.number(),
+  sport_slug: z.string(),
+  sport_name: z.string(),
+  league: z.string(),
+  home_team: z.string(),
+  away_team: z.string(),
+  market_id: z.number().nullable().optional(),
+  market_name: z.string(),
+  market_group: z.string().nullable().optional(),
+  market_period: z.string().nullable().optional(),
+  is_live: z.boolean(),
+  suspended: z.boolean(),
+  source: z.string(),
+  choices: z.array(liveSnapshotOddsChoiceSchema).default([]),
+});
+
+const liveSnapshotProbabilitySchema = z.object({
+  source_id: z.string(),
+  fixture_id: z.number(),
+  sport_slug: z.string(),
+  sport_name: z.string(),
+  league: z.string(),
+  home_team: z.string(),
+  away_team: z.string(),
+  market: z.string(),
+  source: z.string(),
+  home_probability: z.number().nullable().optional(),
+  draw_probability: z.number().nullable().optional(),
+  away_probability: z.number().nullable().optional(),
+  updated_at: z.string(),
+});
+
 const liveSnapshotSchema = z.object({
   updated_at: z.string(),
   count: z.number(),
@@ -124,6 +200,10 @@ const liveSnapshotSchema = z.object({
   players: z.array(liveSnapshotPlayerSchema).default([]),
   fixtures: z.array(liveSnapshotFixtureSchema).default([]),
   standings: z.array(liveSnapshotStandingSchema).default([]),
+  comments: z.array(liveSnapshotCommentSchema).default([]),
+  videos: z.array(liveSnapshotVideoSchema).default([]),
+  odds: z.array(liveSnapshotOddsSchema).default([]),
+  probabilities: z.array(liveSnapshotProbabilitySchema).default([]),
   structured_counts: z
     .object({
       leagues: z.number(),
@@ -131,6 +211,10 @@ const liveSnapshotSchema = z.object({
       players: z.number(),
       fixtures: z.number(),
       standings: z.number(),
+      comments: z.number().optional(),
+      videos: z.number().optional(),
+      odds: z.number().optional(),
+      probabilities: z.number().optional(),
     })
     .optional(),
 });
@@ -188,6 +272,26 @@ export async function loadLiveSnapshotStandings() {
   return snapshot?.standings ?? null;
 }
 
+export async function loadLiveSnapshotComments() {
+  const snapshot = await readLiveSnapshot();
+  return snapshot?.comments ?? null;
+}
+
+export async function loadLiveSnapshotVideos() {
+  const snapshot = await readLiveSnapshot();
+  return snapshot?.videos ?? null;
+}
+
+export async function loadLiveSnapshotOdds() {
+  const snapshot = await readLiveSnapshot();
+  return snapshot?.odds ?? null;
+}
+
+export async function loadLiveSnapshotProbabilities() {
+  const snapshot = await readLiveSnapshot();
+  return snapshot?.probabilities ?? null;
+}
+
 export async function loadLiveSnapshotMeta() {
   const snapshot = await readLiveSnapshot();
 
@@ -212,6 +316,10 @@ export async function loadLiveSnapshotMeta() {
       players: snapshot.players.length,
       fixtures: snapshot.fixtures.length,
       standings: snapshot.standings.length,
+      comments: snapshot.comments.length,
+      videos: snapshot.videos.length,
+      odds: snapshot.odds.length,
+      probabilities: snapshot.probabilities.length,
     },
   };
 }
@@ -224,3 +332,7 @@ export type LiveSnapshotTeam = z.infer<typeof liveSnapshotTeamSchema>;
 export type LiveSnapshotPlayer = z.infer<typeof liveSnapshotPlayerSchema>;
 export type LiveSnapshotFixture = z.infer<typeof liveSnapshotFixtureSchema>;
 export type LiveSnapshotStanding = z.infer<typeof liveSnapshotStandingSchema>;
+export type LiveSnapshotComment = z.infer<typeof liveSnapshotCommentSchema>;
+export type LiveSnapshotVideo = z.infer<typeof liveSnapshotVideoSchema>;
+export type LiveSnapshotOdds = z.infer<typeof liveSnapshotOddsSchema>;
+export type LiveSnapshotProbability = z.infer<typeof liveSnapshotProbabilitySchema>;

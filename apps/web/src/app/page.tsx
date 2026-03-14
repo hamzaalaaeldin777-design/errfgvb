@@ -7,7 +7,7 @@ import { supportedSports } from "@/lib/sports-catalog";
 const features = [
   {
     title: "Full multi-sport data model",
-    description: "Leagues, teams, players, fixtures, live scores, and standings behind a single key across the supported sports catalog.",
+    description: "Countries, leagues, fixtures, H2H, livescore, standings, top scorers, teams, players, videos, odds, probabilities, and commentary behind a single key across the supported sports catalog.",
     icon: Globe,
   },
   {
@@ -226,11 +226,16 @@ export default function Home() {
             <div className="grid gap-4 md:grid-cols-2">
               {[
                 "GET /api/sports",
+                "GET /api/countries",
                 "GET /api/leagues",
+                "GET /api/h2h?team1_id=1&team2_id=3",
                 "GET /api/teams?league_id=1&sport=football",
                 "GET /api/players?team_id=1&sport=football",
                 "GET /api/fixtures?sport=football",
                 "GET /api/fixtures/live?sport=basketball",
+                "GET /api/comments/live?sport=football",
+                "GET /api/odds/live?sport=basketball",
+                "GET /api/probabilities?fixture_id=15566255",
                 "GET /api/standings?league_id=1&sport=football",
               ].map((endpoint) => (
                 <div key={endpoint} className="rounded-[1.5rem] border border-white/10 bg-white/5 p-4">

@@ -49,24 +49,44 @@ infra/
 Protected public endpoints:
 
 - `GET /api/sports`
+- `GET /api/countries`
 - `GET /api/leagues`
 - `GET /api/teams`
 - `GET /api/players`
 - `GET /api/fixtures`
 - `GET /api/fixtures/live`
+- `GET /api/livescore`
+- `GET /api/h2h`
 - `GET /api/standings`
+- `GET /api/topscorers`
+- `GET /api/videos`
+- `GET /api/odds`
+- `GET /api/odds/live`
+- `GET /api/odds/full`
+- `GET /api/probabilities`
+- `GET /api/comments/live`
 
 Each endpoint requires `x-api-key`.
 
 ### Coverage model
 
 - All supported sports expose the core structured surface:
+  - Countries
   - Leagues
+  - H2H
   - Teams
   - Players
   - Fixtures
   - Live fixtures
+  - Livescore
   - Standings
+  - Top scorers
+  - Videos
+  - Odds
+  - Probabilities
+  - Live odds
+  - Live comments
+  - Full odds
 - The worker covers:
   - Esports
   - Football
@@ -110,6 +130,7 @@ Each endpoint requires `x-api-key`.
 - Prints live matches in the required format
 - Writes a shared live snapshot consumed by `GET /api/fixtures/live`
 - Persists leagues, teams, players, fixtures, and standings into PostgreSQL when `DATABASE_URL` points to a real Postgres instance
+- Enriches selected fixtures with commentary, media, bookmaker odds, and probability snapshots when upstream event detail is available
 
 ## Seeded local credentials
 
@@ -358,6 +379,26 @@ curl --request GET \
   --header 'x-api-key: sport_live_demo_free_2026_local'
 ```
 
+### Countries, H2H, and model-backed markets
+
+```bash
+curl --request GET \
+  --url 'http://localhost:4000/api/countries?sport=basketball' \
+  --header 'x-api-key: sport_live_demo_free_2026_local'
+
+curl --request GET \
+  --url 'http://localhost:4000/api/h2h?team1_id=1&team2_id=3&sport=football' \
+  --header 'x-api-key: sport_live_demo_free_2026_local'
+
+curl --request GET \
+  --url 'http://localhost:4000/api/odds/live?sport=basketball&limit=10' \
+  --header 'x-api-key: sport_live_demo_free_2026_local'
+
+curl --request GET \
+  --url 'http://localhost:4000/api/probabilities?sport=basketball&limit=10' \
+  --header 'x-api-key: sport_live_demo_free_2026_local'
+```
+
 ## Verification
 
 Commands run during implementation:
@@ -372,12 +413,17 @@ Live validation commands:
 ```bash
 curl --request GET --url http://localhost:4000/health
 curl --request GET --url http://localhost:4000/api/sports --header 'x-api-key: sport_live_demo_free_2026_local'
+curl --request GET --url 'http://localhost:4000/api/countries?sport=basketball' --header 'x-api-key: sport_live_demo_free_2026_local'
 curl --request GET --url 'http://localhost:4000/api/fixtures/live?sport=football' --header 'x-api-key: sport_live_demo_free_2026_local'
 curl --request GET --url 'http://localhost:4000/api/fixtures/live?sport=esports' --header 'x-api-key: sport_live_demo_free_2026_local'
+curl --request GET --url 'http://localhost:4000/api/topscorers?sport=basketball' --header 'x-api-key: sport_live_demo_free_2026_local'
+curl --request GET --url 'http://localhost:4000/api/odds/live?sport=basketball&limit=10' --header 'x-api-key: sport_live_demo_free_2026_local'
+curl --request GET --url 'http://localhost:4000/api/comments/live?sport=football&limit=10' --header 'x-api-key: sport_live_demo_free_2026_local'
 ```
 
 ## Notes
 
 - The direct `httpx` request path is implemented as required, but SofaScore still returns `403 Forbidden` from this environment. The worker escalates to a verified Playwright navigation fallback after blocked direct attempts.
 - The worker snapshot is what allows the demo API to expose a full live match list even when the local API and worker are not sharing a real PostgreSQL instance.
+- Some endpoint families, especially videos, bookmaker odds, and detailed commentary, depend on sport-by-sport upstream coverage and warm up gradually as the worker enriches fixture detail.
 - The Playwright-based worker image uses Microsoft's Playwright Python base image so Chromium is available inside Docker.

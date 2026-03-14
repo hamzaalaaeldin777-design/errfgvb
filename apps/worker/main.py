@@ -43,11 +43,23 @@ MAX_TEAM_ENRICHMENTS_PER_CYCLE = int(
 MAX_STANDINGS_ENRICHMENTS_PER_CYCLE = int(
     os.getenv("MAX_STANDINGS_ENRICHMENTS_PER_CYCLE", "10")
 )
+MAX_EVENT_DETAIL_ENRICHMENTS_PER_CYCLE = int(
+    os.getenv("MAX_EVENT_DETAIL_ENRICHMENTS_PER_CYCLE", "8")
+)
+MAX_DETAIL_FIXTURES_PER_SPORT = int(
+    os.getenv("MAX_DETAIL_FIXTURES_PER_SPORT", "4")
+)
 TEAM_REFRESH_INTERVAL_SECONDS = float(
     os.getenv("TEAM_REFRESH_INTERVAL_SECONDS", "21600")
 )
 STANDINGS_REFRESH_INTERVAL_SECONDS = float(
     os.getenv("STANDINGS_REFRESH_INTERVAL_SECONDS", "1800")
+)
+EVENT_DETAIL_REFRESH_INTERVAL_SECONDS = float(
+    os.getenv("EVENT_DETAIL_REFRESH_INTERVAL_SECONDS", "21600")
+)
+LIVE_EVENT_DETAIL_REFRESH_INTERVAL_SECONDS = float(
+    os.getenv("LIVE_EVENT_DETAIL_REFRESH_INTERVAL_SECONDS", "120")
 )
 DATABASE_URL = os.getenv("DATABASE_URL")
 LIVE_SNAPSHOT_PATH = Path(
@@ -115,13 +127,20 @@ class StructuredState:
     players: dict[str, dict[str, Any]] = field(default_factory=dict)
     fixtures: dict[str, dict[str, Any]] = field(default_factory=dict)
     standings: dict[str, dict[str, Any]] = field(default_factory=dict)
+    comments: dict[str, dict[str, Any]] = field(default_factory=dict)
+    videos: dict[str, dict[str, Any]] = field(default_factory=dict)
+    odds: dict[str, dict[str, Any]] = field(default_factory=dict)
+    probabilities: dict[str, dict[str, Any]] = field(default_factory=dict)
     sport_updated_at: dict[str, str] = field(default_factory=dict)
     pending_team_keys: deque[tuple[str, int]] = field(default_factory=deque)
     pending_team_set: set[tuple[str, int]] = field(default_factory=set)
     pending_standings_keys: deque[tuple[str, int, int]] = field(default_factory=deque)
     pending_standings_set: set[tuple[str, int, int]] = field(default_factory=set)
+    pending_detail_keys: deque[tuple[str, int]] = field(default_factory=deque)
+    pending_detail_set: set[tuple[str, int]] = field(default_factory=set)
     team_refreshed_at: dict[tuple[str, int], float] = field(default_factory=dict)
     standings_refreshed_at: dict[tuple[str, int, int], float] = field(default_factory=dict)
+    detail_refreshed_at: dict[tuple[str, int], float] = field(default_factory=dict)
 
 
 SPORTS_CATALOG = [
@@ -196,6 +215,22 @@ def build_team_players_url(team_id: int) -> str:
 
 def build_standings_url(tournament_id: int, season_id: int) -> str:
     return STANDINGS_URL.format(tournament_id=tournament_id, season_id=season_id)
+
+
+def build_event_comments_url(event_id: int) -> str:
+    return f"https://api.sofascore.com/api/v1/event/{event_id}/comments"
+
+
+def build_event_incidents_url(event_id: int) -> str:
+    return f"https://api.sofascore.com/api/v1/event/{event_id}/incidents"
+
+
+def build_event_media_url(event_id: int) -> str:
+    return f"https://api.sofascore.com/api/v1/event/{event_id}/media"
+
+
+def build_event_odds_url(event_id: int) -> str:
+    return f"https://api.sofascore.com/api/v1/event/{event_id}/odds/1/all"
 
 
 def coerce_int(value: Any) -> int:
@@ -730,6 +765,135 @@ def merge_events(primary: list[ParsedEvent], secondary: list[ParsedEvent]) -> li
     return list(merged.values())
 
 
+def queue_event_detail_refresh(
+    state: StructuredState,
+    sport_slug: str,
+    match_id: int,
+    is_live: bool,
+) -> None:
+    key = (sport_slug, match_id)
+    refreshed_at = state.detail_refreshed_at.get(key)
+    refresh_interval = (
+        LIVE_EVENT_DETAIL_REFRESH_INTERVAL_SECONDS
+        if is_live
+        else EVENT_DETAIL_REFRESH_INTERVAL_SECONDS
+    )
+
+    if refreshed_at and (time.monotonic() - refreshed_at) < refresh_interval:
+        return
+
+    if key not in state.pending_detail_set:
+        state.pending_detail_set.add(key)
+        state.pending_detail_keys.append(key)
+
+
+def fractional_to_decimal(value: str | None) -> float | None:
+    if not value or "/" not in value:
+        return None
+
+    try:
+        numerator_text, denominator_text = value.split("/", maxsplit=1)
+        numerator = float(numerator_text)
+        denominator = float(denominator_text)
+        if denominator == 0:
+            return None
+        return round((numerator / denominator) + 1, 4)
+    except ValueError:
+        return None
+
+
+def normalize_choice_probabilities(
+    choices: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    raw_probabilities: list[float | None] = []
+    for choice in choices:
+        decimal_value = choice.get("decimal_value")
+        if decimal_value is None or decimal_value <= 1:
+            raw_probabilities.append(None)
+        else:
+            raw_probabilities.append(1 / decimal_value)
+
+    total_probability = sum(value for value in raw_probabilities if value is not None)
+
+    normalized_choices: list[dict[str, Any]] = []
+    for choice, probability in zip(choices, raw_probabilities, strict=False):
+        normalized_choice = dict(choice)
+        if probability is not None and total_probability > 0:
+            normalized_choice["probability"] = round(probability / total_probability, 4)
+        else:
+            normalized_choice["probability"] = None
+        normalized_choices.append(normalized_choice)
+
+    return normalized_choices
+
+
+def build_fallback_comment(
+    fixture: dict[str, Any],
+    sequence: int,
+) -> dict[str, Any]:
+    minute = fixture.get("minute")
+    if minute is not None:
+        prefix = f"{minute}'"
+    else:
+        prefix = fixture.get("status") or "Update"
+
+    return {
+        "source_id": f"{fixture['source_id']}:comment:fallback",
+        "fixture_id": fixture["match_id"],
+        "sport_slug": fixture["sport_slug"],
+        "sport_name": fixture["sport_name"],
+        "league": fixture["league"],
+        "home_team": fixture["home_team"],
+        "away_team": fixture["away_team"],
+        "is_live": fixture["status"] not in {"Not started", "FT", "Finished"},
+        "sequence": sequence,
+        "minute": minute,
+        "type": "scoreUpdate",
+        "text": (
+            f"{prefix} {fixture['home_team']} {fixture['home_score']} - "
+            f"{fixture['away_score']} {fixture['away_team']}"
+        ),
+        "is_home": None,
+        "player": None,
+    }
+
+
+def incident_to_comment_row(
+    fixture: dict[str, Any],
+    incident: dict[str, Any],
+) -> dict[str, Any] | None:
+    text = incident.get("text")
+    if not text:
+        player_name = incident.get("playerName") or (incident.get("player") or {}).get("name")
+        incident_type = incident.get("incidentType") or incident.get("type")
+        if player_name and incident_type:
+            text = f"{player_name} {incident_type}"
+        elif incident_type:
+            text = str(incident_type)
+
+    if not text:
+        return None
+
+    comment_id = incident.get("id") or abs(hash(text)) % 2_000_000_000
+
+    return {
+        "source_id": f"{fixture['source_id']}:comment:{comment_id}",
+        "fixture_id": fixture["match_id"],
+        "sport_slug": fixture["sport_slug"],
+        "sport_name": fixture["sport_name"],
+        "league": fixture["league"],
+        "home_team": fixture["home_team"],
+        "away_team": fixture["away_team"],
+        "is_live": fixture["status"] not in {"Not started", "FT", "Finished"},
+        "sequence": coerce_int(incident.get("sequence") or 0),
+        "minute": coerce_optional_int(incident.get("time")),
+        "type": incident.get("incidentType") or incident.get("type") or "incident",
+        "text": text,
+        "is_home": incident.get("isHome"),
+        "player": incident.get("playerName") or (incident.get("player") or {}).get("name"),
+    }
+
+
 def sync_sport_events(
     client: httpx.Client,
     state: StructuredState,
@@ -757,6 +921,39 @@ def sync_sport_events(
         )
 
     state.sport_updated_at[sport.slug] = datetime.now(UTC).isoformat()
+
+    prioritized_events = sorted(
+        combined_events,
+        key=lambda item: (
+            0 if item.match_id in live_match_ids else 1,
+            0 if item.match_status != "Not started" else 1,
+            item.start_timestamp or 0,
+        ),
+    )
+
+    for event in prioritized_events[:MAX_DETAIL_FIXTURES_PER_SPORT]:
+        queue_event_detail_refresh(
+            state,
+            sport.slug,
+            event.match_id,
+            is_live=event.match_id in live_match_ids,
+        )
+
+    completed_event = next(
+        (
+            event
+            for event in prioritized_events
+            if event.match_id not in live_match_ids and event.match_status != "Not started"
+        ),
+        None,
+    )
+    if completed_event is not None:
+        queue_event_detail_refresh(
+            state,
+            sport.slug,
+            completed_event.match_id,
+            is_live=False,
+        )
 
     if not live_events:
         LOGGER.info("No live events returned for %s.", sport.slug)
@@ -966,6 +1163,179 @@ def enrich_league_standings(client: httpx.Client, state: StructuredState) -> Non
             processed += 1
 
 
+def enrich_event_details(client: httpx.Client, state: StructuredState) -> None:
+    processed = 0
+
+    while (
+        state.pending_detail_keys
+        and processed < MAX_EVENT_DETAIL_ENRICHMENTS_PER_CYCLE
+    ):
+        sport_slug, match_id = state.pending_detail_keys.popleft()
+        state.pending_detail_set.discard((sport_slug, match_id))
+        state.detail_refreshed_at[(sport_slug, match_id)] = time.monotonic()
+
+        fixture_source_id = f"{sport_slug}:{match_id}"
+        fixture = state.fixtures.get(fixture_source_id)
+        if fixture is None:
+            processed += 1
+            continue
+
+        try:
+            comments_payload: dict[str, Any] | None = None
+            incidents_payload: dict[str, Any] | None = None
+
+            try:
+                comments_payload = fetch_json(
+                    client,
+                    build_event_comments_url(match_id),
+                    f"{sport_slug} comments {match_id}",
+                )
+            except Exception:
+                comments_payload = None
+
+            if comments_payload is None or not comments_payload.get("comments"):
+                try:
+                    incidents_payload = fetch_json(
+                        client,
+                        build_event_incidents_url(match_id),
+                        f"{sport_slug} incidents {match_id}",
+                    )
+                except Exception:
+                    incidents_payload = None
+
+            if comments_payload and comments_payload.get("comments"):
+                for comment in comments_payload.get("comments", []):
+                    comment_id = comment.get("id") or abs(hash(comment.get("text", ""))) % 2_000_000_000
+                    state.comments[f"{fixture_source_id}:comment:{comment_id}"] = {
+                        "source_id": f"{fixture_source_id}:comment:{comment_id}",
+                        "fixture_id": match_id,
+                        "sport_slug": fixture["sport_slug"],
+                        "sport_name": fixture["sport_name"],
+                        "league": fixture["league"],
+                        "home_team": fixture["home_team"],
+                        "away_team": fixture["away_team"],
+                        "is_live": fixture["status"] not in {"Not started", "FT", "Finished"},
+                        "sequence": coerce_int(comment.get("sequence") or 0),
+                        "minute": coerce_optional_int(comment.get("time")),
+                        "type": comment.get("type") or "comment",
+                        "text": comment.get("text") or "",
+                        "is_home": comment.get("isHome"),
+                        "player": comment.get("playerName") or (comment.get("player") or {}).get("name"),
+                    }
+            elif incidents_payload and incidents_payload.get("incidents"):
+                for incident in incidents_payload.get("incidents", []):
+                    row = incident_to_comment_row(fixture, incident)
+                    if row is not None:
+                        state.comments[row["source_id"]] = row
+            elif fixture["status"] not in {"Not started", "FT", "Finished"}:
+                fallback_comment = build_fallback_comment(fixture, processed)
+                state.comments[fallback_comment["source_id"]] = fallback_comment
+
+            try:
+                media_payload = fetch_json(
+                    client,
+                    build_event_media_url(match_id),
+                    f"{sport_slug} media {match_id}",
+                )
+            except Exception:
+                media_payload = None
+
+            if media_payload and media_payload.get("media"):
+                for media in media_payload.get("media", []):
+                    media_id = media.get("id") or abs(hash(media.get("url", ""))) % 2_000_000_000
+                    state.videos[f"{fixture_source_id}:video:{media_id}"] = {
+                        "source_id": f"{fixture_source_id}:video:{media_id}",
+                        "fixture_id": match_id,
+                        "sport_slug": fixture["sport_slug"],
+                        "sport_name": fixture["sport_name"],
+                        "league": fixture["league"],
+                        "home_team": fixture["home_team"],
+                        "away_team": fixture["away_team"],
+                        "title": media.get("title") or f"{fixture['home_team']} vs {fixture['away_team']}",
+                        "subtitle": media.get("subtitle"),
+                        "url": media.get("url") or media.get("sourceUrl"),
+                        "thumbnail_url": media.get("thumbnailUrl"),
+                        "media_type": str(media.get("mediaType")) if media.get("mediaType") is not None else None,
+                        "published_at": iso_from_timestamp(coerce_optional_int(media.get("createdAtTimestamp"))),
+                        "is_highlight": bool(media.get("keyHighlight")),
+                    }
+
+            try:
+                odds_payload = fetch_json(
+                    client,
+                    build_event_odds_url(match_id),
+                    f"{sport_slug} odds {match_id}",
+                )
+            except Exception:
+                odds_payload = None
+
+            if odds_payload and odds_payload.get("markets"):
+                for market in odds_payload.get("markets", [])[:12]:
+                    market_key = (
+                        f"{fixture_source_id}:odds:"
+                        f"{market.get('marketId') or market.get('id') or market.get('marketName')}"
+                    )
+                    normalized_choices = normalize_choice_probabilities(
+                        [
+                            {
+                                "name": choice.get("name") or "Selection",
+                                "fractional_value": choice.get("fractionalValue"),
+                                "decimal_value": fractional_to_decimal(choice.get("fractionalValue")),
+                                "winning": choice.get("winning"),
+                            }
+                            for choice in market.get("choices", [])
+                        ]
+                    )
+                    state.odds[market_key] = {
+                        "source_id": market_key,
+                        "fixture_id": match_id,
+                        "sport_slug": fixture["sport_slug"],
+                        "sport_name": fixture["sport_name"],
+                        "league": fixture["league"],
+                        "home_team": fixture["home_team"],
+                        "away_team": fixture["away_team"],
+                        "market_id": coerce_optional_int(market.get("marketId") or market.get("id")),
+                        "market_name": market.get("marketName") or "Market",
+                        "market_group": market.get("marketGroup"),
+                        "market_period": market.get("marketPeriod"),
+                        "is_live": bool(market.get("isLive")),
+                        "suspended": bool(market.get("suspended")),
+                        "source": "upstream_odds",
+                        "choices": normalized_choices,
+                    }
+
+                    if len(normalized_choices) >= 2:
+                        probability_key = f"{fixture_source_id}:probability:{market.get('marketName') or 'match'}"
+                        state.probabilities[probability_key] = {
+                            "source_id": probability_key,
+                            "fixture_id": match_id,
+                            "sport_slug": fixture["sport_slug"],
+                            "sport_name": fixture["sport_name"],
+                            "league": fixture["league"],
+                            "home_team": fixture["home_team"],
+                            "away_team": fixture["away_team"],
+                            "market": market.get("marketName") or "Match winner",
+                            "source": "upstream_odds",
+                            "home_probability": normalized_choices[0].get("probability"),
+                            "draw_probability": (
+                                normalized_choices[1].get("probability")
+                                if len(normalized_choices) == 3
+                                else None
+                            ),
+                            "away_probability": normalized_choices[-1].get("probability"),
+                            "updated_at": datetime.now(UTC).isoformat(),
+                        }
+        except Exception as error:  # noqa: BLE001
+            LOGGER.warning(
+                "Event detail enrichment failed for %s fixture %s: %s",
+                sport_slug,
+                match_id,
+                error,
+            )
+        finally:
+            processed += 1
+
+
 def persist_live_snapshot(
     selected_sports: list[SportDefinition],
     state: StructuredState,
@@ -992,6 +1362,28 @@ def persist_live_snapshot(
     standings = list(state.standings.values())
     standings.sort(key=lambda row: (row["league"], row["position"], row["team"]))
 
+    comments = list(state.comments.values())
+    comments.sort(
+        key=lambda row: (
+            row["sport_name"],
+            row["fixture_id"],
+            row["sequence"],
+            row["minute"] if row["minute"] is not None else -1,
+        )
+    )
+
+    videos = list(state.videos.values())
+    videos.sort(
+        key=lambda row: (row["sport_name"], row["published_at"] or "", row["title"]),
+        reverse=True,
+    )
+
+    odds = list(state.odds.values())
+    odds.sort(key=lambda row: (row["sport_name"], row["fixture_id"], row["market_name"]))
+
+    probabilities = list(state.probabilities.values())
+    probabilities.sort(key=lambda row: (row["sport_name"], row["fixture_id"], row["market"]))
+
     snapshot = {
         "updated_at": datetime.now(UTC).isoformat(),
         "count": len(matches),
@@ -1011,12 +1403,20 @@ def persist_live_snapshot(
         "players": players,
         "fixtures": fixtures,
         "standings": standings,
+        "comments": comments,
+        "videos": videos,
+        "odds": odds,
+        "probabilities": probabilities,
         "structured_counts": {
             "leagues": len(leagues),
             "teams": len(teams),
             "players": len(players),
             "fixtures": len(fixtures),
             "standings": len(standings),
+            "comments": len(comments),
+            "videos": len(videos),
+            "odds": len(odds),
+            "probabilities": len(probabilities),
         },
     }
 
@@ -1306,6 +1706,7 @@ def run_scraper() -> None:
                     )
 
             try:
+                enrich_event_details(client, state)
                 enrich_league_standings(client, state)
                 enrich_team_rosters(client, state)
                 persist_live_snapshot(selected_sports, state)
