@@ -1,0 +1,49 @@
+name: Worker Sync
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/5 * * * *"
+
+concurrency:
+  group: worker-sync
+  cancel-in-progress: true
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      REQUEST_TIMEOUT_SECONDS: "20"
+      REQUEST_THROTTLE_SECONDS: "3"
+      FETCH_INTERVAL_SECONDS: "10"
+      ENABLE_PLAYWRIGHT_FALLBACK: "true"
+      MAX_CYCLES: "1"
+      MAX_TEAM_ENRICHMENTS_PER_CYCLE: "5"
+      MAX_STANDINGS_ENRICHMENTS_PER_CYCLE: "5"
+      MAX_EVENT_DETAIL_ENRICHMENTS_PER_CYCLE: "0"
+      MAX_DETAIL_FIXTURES_PER_SPORT: "0"
+      PYTHONIOENCODING: "utf-8"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+        working-directory: apps/worker
+
+      - name: Install Playwright Chromium
+        run: python -m playwright install --with-deps chromium
+        working-directory: apps/worker
+
+      - name: Run worker sync
+        run: python main.py
+        working-directory: apps/worker

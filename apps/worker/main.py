@@ -31,6 +31,7 @@ HEADERS = {
 REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "20"))
 REQUEST_THROTTLE_SECONDS = float(os.getenv("REQUEST_THROTTLE_SECONDS", "3"))
 FETCH_INTERVAL_SECONDS = float(os.getenv("FETCH_INTERVAL_SECONDS", "10"))
+MAX_CYCLES = int(os.getenv("MAX_CYCLES", "0"))
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "5"))
 BACKOFF_BASE_SECONDS = float(os.getenv("BACKOFF_BASE_SECONDS", "1.5"))
 PLAYWRIGHT_WAIT_MS = int(os.getenv("PLAYWRIGHT_WAIT_MS", "1500"))
@@ -1679,6 +1680,7 @@ def persist_snapshot_to_database(state: StructuredState) -> None:
 def run_scraper() -> None:
     selected_sports = resolve_selected_sports()
     state = StructuredState()
+    completed_cycles = 0
 
     LOGGER.info(
         "Starting SofaScore structured scraper for sports: %s",
@@ -1713,6 +1715,11 @@ def run_scraper() -> None:
                 persist_snapshot_to_database(state)
             except Exception as error:  # noqa: BLE001
                 LOGGER.exception("Structured persistence failed: %s", error)
+
+            completed_cycles += 1
+            if MAX_CYCLES > 0 and completed_cycles >= MAX_CYCLES:
+                LOGGER.info("Stopping after %s cycle(s).", completed_cycles)
+                break
 
             elapsed = time.monotonic() - cycle_started_at
             sleep_seconds = max(0.0, FETCH_INTERVAL_SECONDS - elapsed)

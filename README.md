@@ -247,6 +247,47 @@ Recommended worker targets:
 - A VPS
 - GitHub Actions on a schedule for lower-frequency scraping
 
+### GitHub Actions worker setup
+
+If you do not want to keep your own PC running, the repo includes a GitHub Actions workflow at [.github/workflows/worker-sync.yml](/C:/Users/LENOVO/Downloads/sports/.github/workflows/worker-sync.yml).
+
+What it does:
+
+- Runs the worker on `workflow_dispatch`
+- Runs automatically every 5 minutes
+- Uses Playwright Chromium in GitHub-hosted Linux runners
+- Executes one scrape cycle and exits
+
+Important tradeoff:
+
+- This is the closest free-forever option, but it is not true 10-second live infrastructure
+- The workflow is tuned for periodic sync, not permanent real-time streaming
+
+GitHub repository secrets required:
+
+```env
+DATABASE_URL=postgresql://your-neon-pooled-url
+```
+
+Recommended steps:
+
+1. Open your GitHub repo settings.
+2. Go to `Secrets and variables` -> `Actions`.
+3. Add a repository secret named `DATABASE_URL`.
+4. Open the `Actions` tab.
+5. Run `Worker Sync` once manually to warm the database.
+6. Leave the schedule enabled for ongoing updates.
+
+Current workflow tuning:
+
+- `MAX_CYCLES=1`
+- `REQUEST_THROTTLE_SECONDS=3`
+- `MAX_TEAM_ENRICHMENTS_PER_CYCLE=5`
+- `MAX_STANDINGS_ENRICHMENTS_PER_CYCLE=5`
+- `MAX_EVENT_DETAIL_ENRICHMENTS_PER_CYCLE=0`
+
+That keeps runs short enough for scheduled GitHub execution while still backfilling the core multi-sport surface.
+
 Worker environment:
 
 ```env
@@ -256,6 +297,7 @@ REQUEST_THROTTLE_SECONDS=3
 FETCH_INTERVAL_SECONDS=10
 ENABLE_PLAYWRIGHT_FALLBACK=true
 SPORTS=
+MAX_CYCLES=0
 ```
 
 ### Railway worker setup
