@@ -36,7 +36,8 @@ create table if not exists players (
   nationality text,
   photo_url text,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  unique (team_id, name)
 );
 
 create table if not exists fixtures (

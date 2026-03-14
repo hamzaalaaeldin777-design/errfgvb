@@ -57,14 +57,15 @@ export const authChecks = [
 
 export const platformNotes = [
   "Public REST endpoints require x-api-key. Dashboard and admin routes use JWT bearer tokens.",
-  "Football has the deepest structured coverage today: leagues, teams, players, fixtures, and standings.",
-  "The worker now refreshes a multi-sport live catalog, throttles upstream requests to at most one every 3 seconds, and writes a shared snapshot consumed by the API.",
+  "Every supported sport now flows through the same structured API surface: leagues, teams, players, fixtures, live fixtures, and standings.",
+  "The worker refreshes a multi-sport catalog, throttles upstream requests to at most one every 3 seconds, and writes a shared snapshot consumed by the API while also syncing PostgreSQL when available.",
   "Response headers include x-ratelimit-limit and x-ratelimit-remaining for metered plans.",
 ];
 
 export const coverageNotes = [
-  "Football is the fully modeled sport in the current build, including seeded leagues, clubs, players, fixtures, standings, JWT dashboard flows, and API key usage analytics.",
-  "The broader sport list is available through the live worker and the /api/sports plus /api/fixtures/live endpoints, which expose sport-specific live boards from SofaScore-backed JSON feeds.",
+  "All listed sports now expose the same core endpoints for leagues, teams, players, fixtures, live fixtures, and standings.",
+  "Structured responses are assembled from the worker snapshot in local demo mode and from PostgreSQL in production when the worker is connected to a real database.",
+  "Some upstream competitions still return sparse fields, so empty standings or short player lists can happen for event formats where SofaScore does not expose a richer table or roster.",
 ];
 
 export const multiSportCatalog = supportedSports;
@@ -97,7 +98,7 @@ export const implementedEndpoints: ImplementedEndpoint[] = [
       "name": "Basketball",
       "live_count": 15,
       "updated_at": "2026-03-14T00:12:08+00:00",
-      "coverage": ["live"]
+      "coverage": ["live", "leagues", "teams", "players", "fixtures", "standings"]
     }
   ]
 }`,
@@ -105,7 +106,7 @@ export const implementedEndpoints: ImplementedEndpoint[] = [
   {
     method: "GET",
     path: "/api/leagues",
-    description: "List structured competitions currently stored in SportStack. This is football-first in the current build, but now includes sport metadata in every row.",
+    description: "List structured competitions currently available across the supported sports catalog.",
     params: "sport, search",
     response: `{
   "success": true,
@@ -149,7 +150,7 @@ export const implementedEndpoints: ImplementedEndpoint[] = [
   {
     method: "GET",
     path: "/api/players?team_id=1&sport=football",
-    description: "Return players for a club or search across player names. Structured player coverage is currently football-only.",
+    description: "Return players for a club or search across player names for every supported sport.",
     params: "team_id, sport, search",
     response: `{
   "success": true,
@@ -228,7 +229,7 @@ export const implementedEndpoints: ImplementedEndpoint[] = [
   {
     method: "GET",
     path: "/api/standings?league_id=1&sport=football",
-    description: "Return table rows ordered by position for a competition. Structured standings are currently football-only.",
+    description: "Return table rows ordered by position for a competition when the upstream tournament exposes standings data.",
     params: "league_id, sport",
     response: `{
   "success": true,

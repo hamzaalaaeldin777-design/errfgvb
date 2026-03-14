@@ -6,8 +6,8 @@ import { supportedSports } from "@/lib/sports-catalog";
 
 const features = [
   {
-    title: "Football-depth data model",
-    description: "Leagues, teams, players, fixtures, live scores, and standings behind a single key for the deepest sport in the platform.",
+    title: "Full multi-sport data model",
+    description: "Leagues, teams, players, fixtures, live scores, and standings behind a single key across the supported sports catalog.",
     icon: Globe,
   },
   {
@@ -55,7 +55,7 @@ export default function Home() {
               Ship multi-sport live products without managing brittle scrapers.
             </h1>
             <p className="mt-6 max-w-2xl text-lg leading-8 text-[var(--muted)]">
-              SportStack gives developers football-depth structured endpoints plus a live board across esports,
+              SportStack gives developers structured endpoints plus a live board across esports,
               football, tennis, basketball, baseball, volleyball, American football, handball, table tennis, ice
               hockey, darts, motorsport, cycling, cricket, MMA, rugby, futsal, badminton, water polo, snooker,
               Aussie rules, beach volleyball, minifootball, floorball, and bandy.
@@ -77,8 +77,8 @@ export default function Home() {
             </div>
             <div className="mt-10 grid gap-4 sm:grid-cols-3">
               {[
-                ["Supported sports", `${supportedSports.length} live feeds`],
-                ["Structured depth", "Football + dashboard controls"],
+                ["Supported sports", `${supportedSports.length} structured APIs`],
+                ["Structured depth", "All sports + dashboard controls"],
                 ["Deployment", "Docker-ready stack"],
               ].map(([label, value]) => (
                 <div key={label} className="panel rounded-[1.75rem] p-4">
@@ -163,8 +163,8 @@ export default function Home() {
               <h2 className="mt-4 text-4xl font-semibold tracking-tight">Supported sports in the live worker.</h2>
             </div>
             <p className="max-w-2xl text-sm leading-7 text-[var(--muted)]">
-              Football is the deepest structured sport today. The wider catalog is available through the live worker,
-              the sports index, and the filtered live fixtures endpoint.
+              Every listed sport now shares the same structured route family, with live and scheduled data flowing
+              through the worker snapshot and the public API.
             </p>
           </div>
           <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-5">
@@ -208,7 +208,7 @@ export default function Home() {
         <section className="mx-auto mt-16 grid max-w-7xl gap-6 lg:grid-cols-[0.9fr_1.1fr]">
           <div className="panel rounded-[2.25rem] p-6">
             <p className="eyebrow">Documentation preview</p>
-            <h2 className="mt-4 text-3xl font-semibold">A docs surface for football depth and multi-sport live coverage.</h2>
+            <h2 className="mt-4 text-3xl font-semibold">A docs surface for full multi-sport coverage.</h2>
             <p className="mt-4 text-sm leading-7 text-[var(--muted)]">
               Endpoint examples, parameters, authentication instructions, supported sport slugs, and sample JSON
               responses are all published inside the app.

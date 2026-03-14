@@ -27,11 +27,112 @@ const liveSnapshotMatchSchema = z.object({
   starts_at: z.string().nullable().optional(),
 });
 
+const liveSnapshotLeagueSchema = z.object({
+  id: z.number(),
+  source_id: z.string(),
+  sport_slug: z.string(),
+  sport_name: z.string(),
+  name: z.string(),
+  country: z.string().nullable().optional(),
+  season: z.string(),
+  logo_url: z.string().nullable().optional(),
+});
+
+const liveSnapshotTeamSchema = z.object({
+  id: z.number(),
+  source_id: z.string(),
+  league_id: z.number().nullable().optional(),
+  league_source_id: z.string().nullable().optional(),
+  name: z.string(),
+  short_name: z.string().nullable().optional(),
+  country: z.string().nullable().optional(),
+  founded: z.number().nullable().optional(),
+  venue: z.string().nullable().optional(),
+  logo_url: z.string().nullable().optional(),
+  league: z.string().nullable().optional(),
+  sport_slug: z.string(),
+  sport_name: z.string(),
+});
+
+const liveSnapshotPlayerSchema = z.object({
+  id: z.number(),
+  source_id: z.string(),
+  team_id: z.number().nullable().optional(),
+  team_source_id: z.string().nullable().optional(),
+  name: z.string(),
+  position: z.string().nullable().optional(),
+  age: z.number().nullable().optional(),
+  nationality: z.string().nullable().optional(),
+  photo_url: z.string().nullable().optional(),
+  team: z.string().nullable().optional(),
+  sport_slug: z.string(),
+  sport_name: z.string(),
+});
+
+const liveSnapshotFixtureSchema = z.object({
+  match_id: z.number(),
+  source_id: z.string(),
+  league_id: z.number().nullable().optional(),
+  league_source_id: z.string().nullable().optional(),
+  sport_slug: z.string(),
+  sport_name: z.string(),
+  league: z.string(),
+  country: z.string().nullable().optional(),
+  season: z.string().nullable().optional(),
+  home_team_id: z.number().nullable().optional(),
+  home_team_source_id: z.string().nullable().optional(),
+  away_team_id: z.number().nullable().optional(),
+  away_team_source_id: z.string().nullable().optional(),
+  home_team: z.string(),
+  away_team: z.string(),
+  home_score: z.number(),
+  away_score: z.number(),
+  score: z.string(),
+  minute: z.number().nullable(),
+  status: z.string(),
+  starts_at: z.string().nullable().optional(),
+  venue: z.string().nullable().optional(),
+});
+
+const liveSnapshotStandingSchema = z.object({
+  league_id: z.number(),
+  league_source_id: z.string().nullable().optional(),
+  team_id: z.number().nullable().optional(),
+  team_source_id: z.string().nullable().optional(),
+  sport_slug: z.string(),
+  sport_name: z.string(),
+  position: z.number(),
+  team: z.string(),
+  played: z.number(),
+  wins: z.number(),
+  draws: z.number(),
+  losses: z.number(),
+  goals_for: z.number(),
+  goals_against: z.number(),
+  points: z.number(),
+  form: z.string().nullable().optional(),
+  league: z.string(),
+});
+
 const liveSnapshotSchema = z.object({
   updated_at: z.string(),
   count: z.number(),
   sports: z.array(liveSnapshotSportSchema).default([]),
   matches: z.array(liveSnapshotMatchSchema),
+  leagues: z.array(liveSnapshotLeagueSchema).default([]),
+  teams: z.array(liveSnapshotTeamSchema).default([]),
+  players: z.array(liveSnapshotPlayerSchema).default([]),
+  fixtures: z.array(liveSnapshotFixtureSchema).default([]),
+  standings: z.array(liveSnapshotStandingSchema).default([]),
+  structured_counts: z
+    .object({
+      leagues: z.number(),
+      teams: z.number(),
+      players: z.number(),
+      fixtures: z.number(),
+      standings: z.number(),
+    })
+    .optional(),
 });
 
 async function readLiveSnapshot() {
@@ -62,6 +163,31 @@ export async function loadLiveSnapshotSports() {
   return snapshot?.sports ?? null;
 }
 
+export async function loadLiveSnapshotLeagues() {
+  const snapshot = await readLiveSnapshot();
+  return snapshot?.leagues ?? null;
+}
+
+export async function loadLiveSnapshotTeams() {
+  const snapshot = await readLiveSnapshot();
+  return snapshot?.teams ?? null;
+}
+
+export async function loadLiveSnapshotPlayers() {
+  const snapshot = await readLiveSnapshot();
+  return snapshot?.players ?? null;
+}
+
+export async function loadLiveSnapshotFixtures() {
+  const snapshot = await readLiveSnapshot();
+  return snapshot?.fixtures ?? null;
+}
+
+export async function loadLiveSnapshotStandings() {
+  const snapshot = await readLiveSnapshot();
+  return snapshot?.standings ?? null;
+}
+
 export async function loadLiveSnapshotMeta() {
   const snapshot = await readLiveSnapshot();
 
@@ -80,9 +206,21 @@ export async function loadLiveSnapshotMeta() {
       updated_at: sport.updated_at ?? null,
     })),
     source: "worker_snapshot",
+    structured_counts: snapshot.structured_counts ?? {
+      leagues: snapshot.leagues.length,
+      teams: snapshot.teams.length,
+      players: snapshot.players.length,
+      fixtures: snapshot.fixtures.length,
+      standings: snapshot.standings.length,
+    },
   };
 }
 
 export type LiveSnapshot = NonNullable<Awaited<ReturnType<typeof loadLiveSnapshot>>>;
 export type LiveSnapshotMatch = z.infer<typeof liveSnapshotMatchSchema>;
 export type LiveSnapshotSport = z.infer<typeof liveSnapshotSportSchema>;
+export type LiveSnapshotLeague = z.infer<typeof liveSnapshotLeagueSchema>;
+export type LiveSnapshotTeam = z.infer<typeof liveSnapshotTeamSchema>;
+export type LiveSnapshotPlayer = z.infer<typeof liveSnapshotPlayerSchema>;
+export type LiveSnapshotFixture = z.infer<typeof liveSnapshotFixtureSchema>;
+export type LiveSnapshotStanding = z.infer<typeof liveSnapshotStandingSchema>;

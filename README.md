@@ -1,6 +1,6 @@
 # SportStack
 
-SportStack is a full-stack sports data platform inspired by API-first SaaS products such as api-sports.io, Stripe, and Vercel. The current build combines football-depth structured endpoints with a broader multi-sport live board.
+SportStack is a full-stack sports data platform inspired by API-first SaaS products such as api-sports.io, Stripe, and Vercel. The current build combines full multi-sport structured endpoints with a broader multi-sport live board.
 
 It includes:
 
@@ -60,8 +60,14 @@ Each endpoint requires `x-api-key`.
 
 ### Coverage model
 
-- Football has the deepest structured coverage: leagues, teams, players, fixtures, and standings
-- The live worker now covers:
+- All supported sports expose the core structured surface:
+  - Leagues
+  - Teams
+  - Players
+  - Fixtures
+  - Live fixtures
+  - Standings
+- The worker covers:
   - Esports
   - Football
   - Tennis
@@ -103,7 +109,7 @@ Each endpoint requires `x-api-key`.
 - Falls back to Playwright browser navigation when SofaScore blocks direct requests
 - Prints live matches in the required format
 - Writes a shared live snapshot consumed by `GET /api/fixtures/live`
-- Optionally persists live leagues, teams, and fixtures into PostgreSQL when `DATABASE_URL` points to a real Postgres instance
+- Persists leagues, teams, players, fixtures, and standings into PostgreSQL when `DATABASE_URL` points to a real Postgres instance
 
 ## Seeded local credentials
 
@@ -344,11 +350,11 @@ Example response shape:
 }
 ```
 
-### Structured football fixtures
+### Structured multi-sport fixtures
 
 ```bash
 curl --request GET \
-  --url 'http://localhost:4000/api/fixtures?sport=football&league_id=1' \
+  --url 'http://localhost:4000/api/fixtures?sport=basketball' \
   --header 'x-api-key: sport_live_demo_free_2026_local'
 ```
 

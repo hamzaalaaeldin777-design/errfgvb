@@ -24,13 +24,13 @@ export default function DocsPage() {
               <div>
                 <p className="eyebrow">Documentation</p>
                 <h1 className="mt-4 max-w-4xl text-4xl font-semibold tracking-tight md:text-5xl">
-                  Multi-sport API docs with football-depth data and a verified live board across the wider sports catalog.
+                  Multi-sport API docs with full structured coverage and a verified live board across the supported catalog.
                 </h1>
                 <p className="mt-4 max-w-3xl text-base leading-8 text-[var(--muted)]">
                   SportStack serves a developer-facing sports API, a JWT-secured dashboard, and a live worker that
-                  refreshes the current board across the supported sports catalog. The sections below separate the
-                  endpoints that work today from the broader football reference surface modeled after the official
-                  API-Football v3 documentation.
+                  refreshes the current board across the supported sports catalog. The sections below show the
+                  endpoints that work today together with the broader API-Football-style reference surface used as a
+                  parity roadmap.
                 </p>
                 <div className="mt-6 flex flex-wrap gap-3">
                   <Link

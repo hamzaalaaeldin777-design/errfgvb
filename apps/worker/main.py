@@ -4,20 +4,30 @@ import logging
 import os
 import sys
 import time
-from dataclasses import dataclass
-from datetime import UTC, datetime
+from collections import deque
+from dataclasses import dataclass, field
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
 import httpx
 
-BASE_URL = "https://api.sofascore.com/api/v1/sport/{sport_slug}/events/live"
+LIVE_URL = "https://api.sofascore.com/api/v1/sport/{sport_slug}/events/live"
+SCHEDULED_URL = (
+    "https://api.sofascore.com/api/v1/sport/{sport_slug}/scheduled-events/{target_date}"
+)
+TEAM_PLAYERS_URL = "https://api.sofascore.com/api/v1/team/{team_id}/players"
+STANDINGS_URL = (
+    "https://api.sofascore.com/api/v1/unique-tournament/{tournament_id}/season/{season_id}/standings/total"
+)
+
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
     "Accept": "application/json",
     "Referer": "https://www.sofascore.com/",
     "Origin": "https://www.sofascore.com",
 }
+
 REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "20"))
 REQUEST_THROTTLE_SECONDS = float(os.getenv("REQUEST_THROTTLE_SECONDS", "3"))
 FETCH_INTERVAL_SECONDS = float(os.getenv("FETCH_INTERVAL_SECONDS", "10"))
@@ -26,6 +36,18 @@ BACKOFF_BASE_SECONDS = float(os.getenv("BACKOFF_BASE_SECONDS", "1.5"))
 PLAYWRIGHT_WAIT_MS = int(os.getenv("PLAYWRIGHT_WAIT_MS", "1500"))
 ENABLE_PLAYWRIGHT_FALLBACK = (
     os.getenv("ENABLE_PLAYWRIGHT_FALLBACK", "true").lower() == "true"
+)
+MAX_TEAM_ENRICHMENTS_PER_CYCLE = int(
+    os.getenv("MAX_TEAM_ENRICHMENTS_PER_CYCLE", "10")
+)
+MAX_STANDINGS_ENRICHMENTS_PER_CYCLE = int(
+    os.getenv("MAX_STANDINGS_ENRICHMENTS_PER_CYCLE", "10")
+)
+TEAM_REFRESH_INTERVAL_SECONDS = float(
+    os.getenv("TEAM_REFRESH_INTERVAL_SECONDS", "21600")
+)
+STANDINGS_REFRESH_INTERVAL_SECONDS = float(
+    os.getenv("STANDINGS_REFRESH_INTERVAL_SECONDS", "1800")
 )
 DATABASE_URL = os.getenv("DATABASE_URL")
 LIVE_SNAPSHOT_PATH = Path(
@@ -57,23 +79,49 @@ class SportDefinition:
 
 
 @dataclass(slots=True)
-class LiveMatch:
+class ParsedCompetitor:
+    competitor_id: int | None
+    name: str
+    short_name: str | None
+    country: str | None
+    is_individual: bool
+
+
+@dataclass(slots=True)
+class ParsedEvent:
     sport_slug: str
     sport_name: str
     match_id: int
     tournament_id: int | None
     tournament_name: str
     country_name: str | None
+    season_id: int | None
     season_name: str | None
-    home_team_id: int | None
-    home_team: str
-    away_team_id: int | None
-    away_team: str
+    home: ParsedCompetitor
+    away: ParsedCompetitor
     home_score: int
     away_score: int
     match_status: str
     match_minute: int | None
     start_timestamp: int | None
+    venue: str | None
+
+
+@dataclass(slots=True)
+class StructuredState:
+    live_matches: dict[str, dict[int, dict[str, Any]]] = field(default_factory=dict)
+    leagues: dict[str, dict[str, Any]] = field(default_factory=dict)
+    teams: dict[str, dict[str, Any]] = field(default_factory=dict)
+    players: dict[str, dict[str, Any]] = field(default_factory=dict)
+    fixtures: dict[str, dict[str, Any]] = field(default_factory=dict)
+    standings: dict[str, dict[str, Any]] = field(default_factory=dict)
+    sport_updated_at: dict[str, str] = field(default_factory=dict)
+    pending_team_keys: deque[tuple[str, int]] = field(default_factory=deque)
+    pending_team_set: set[tuple[str, int]] = field(default_factory=set)
+    pending_standings_keys: deque[tuple[str, int, int]] = field(default_factory=deque)
+    pending_standings_set: set[tuple[str, int, int]] = field(default_factory=set)
+    team_refreshed_at: dict[tuple[str, int], float] = field(default_factory=dict)
+    standings_refreshed_at: dict[tuple[str, int, int], float] = field(default_factory=dict)
 
 
 SPORTS_CATALOG = [
@@ -132,7 +180,22 @@ def resolve_selected_sports() -> list[SportDefinition]:
 
 
 def build_live_url(sport: SportDefinition) -> str:
-    return BASE_URL.format(sport_slug=sport.slug)
+    return LIVE_URL.format(sport_slug=sport.slug)
+
+
+def build_scheduled_url(sport: SportDefinition, target_date: date) -> str:
+    return SCHEDULED_URL.format(
+        sport_slug=sport.slug,
+        target_date=target_date.isoformat(),
+    )
+
+
+def build_team_players_url(team_id: int) -> str:
+    return TEAM_PLAYERS_URL.format(team_id=team_id)
+
+
+def build_standings_url(tournament_id: int, season_id: int) -> str:
+    return STANDINGS_URL.format(tournament_id=tournament_id, season_id=season_id)
 
 
 def coerce_int(value: Any) -> int:
@@ -142,7 +205,29 @@ def coerce_int(value: Any) -> int:
         return 0
 
 
-def compute_match_minute(event: dict[str, Any]) -> int | None:
+def coerce_optional_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def compute_age(date_of_birth_timestamp: Any) -> int | None:
+    if not date_of_birth_timestamp:
+        return None
+
+    try:
+        born = datetime.fromtimestamp(int(date_of_birth_timestamp), tz=UTC).date()
+    except (TypeError, ValueError, OSError):
+        return None
+
+    today = datetime.now(UTC).date()
+    return today.year - born.year - (
+        (today.month, today.day) < (born.month, born.day)
+    )
+
+
+def compute_match_minute(event: dict[str, Any], sport_slug: str) -> int | None:
     status = event.get("status") or {}
     status_type = status.get("type")
 
@@ -150,25 +235,26 @@ def compute_match_minute(event: dict[str, Any]) -> int | None:
         return None
 
     event_time = event.get("time") or {}
-    description = (status.get("description") or "").lower()
     period_start = event_time.get("currentPeriodStartTimestamp")
-    injury_time = (
-        event_time.get("injuryTime2")
-        or event_time.get("injuryTime1")
-        or event_time.get("extra")
-        or 0
-    )
-
     if not period_start:
-        return 45 if "half" in description and "1st" not in description else None
+        return None
 
     elapsed_seconds = max(0, int(time.time()) - int(period_start))
     elapsed_minutes = elapsed_seconds // 60
 
-    if "2nd" in description:
-        return min(120, 45 + elapsed_minutes + int(injury_time))
+    if sport_slug == "football":
+        description = (status.get("description") or "").lower()
+        injury_time = (
+            event_time.get("injuryTime2")
+            or event_time.get("injuryTime1")
+            or event_time.get("extra")
+            or 0
+        )
+        if "2nd" in description:
+            return min(130, 45 + elapsed_minutes + int(injury_time))
+        return min(70, elapsed_minutes + int(injury_time))
 
-    return min(60, elapsed_minutes + int(injury_time))
+    return min(300, elapsed_minutes)
 
 
 def ensure_playwright_page():
@@ -245,29 +331,28 @@ def hydrate_httpx_session_with_playwright(client: httpx.Client) -> bool:
         return False
 
 
-def fetch_with_playwright_direct(sport: SportDefinition) -> dict[str, Any]:
+def fetch_with_playwright_direct(url: str, label: str) -> dict[str, Any]:
     page = ensure_playwright_page()
     throttle_requests()
-    response = page.goto(build_live_url(sport), wait_until="domcontentloaded")
+    response = page.goto(url, wait_until="domcontentloaded")
 
     if not response or response.status != 200:
         raise RuntimeError(
-            f"Playwright fallback returned status code {response.status if response else 'unknown'} for {sport.slug}."
+            f"Playwright fallback returned status code {response.status if response else 'unknown'} for {label}."
         )
 
     payload = page.text_content("body")
-    LOGGER.info("Fetched live matches via Playwright fallback for %s.", sport.slug)
+    LOGGER.info("Fetched %s via Playwright fallback.", label)
     return json.loads(payload or "{}")
 
 
-def fetch_live_matches(client: httpx.Client, sport: SportDefinition) -> dict[str, Any]:
+def fetch_json(client: httpx.Client, url: str, label: str) -> dict[str, Any]:
     global HTTPX_BLOCKED
 
     if HTTPX_BLOCKED and ENABLE_PLAYWRIGHT_FALLBACK:
-        return fetch_with_playwright_direct(sport)
+        return fetch_with_playwright_direct(url, label)
 
     backoff_seconds = BACKOFF_BASE_SECONDS
-    url = build_live_url(sport)
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
@@ -280,7 +365,7 @@ def fetch_live_matches(client: httpx.Client, sport: SportDefinition) -> dict[str
             if response.status_code == 403 and ENABLE_PLAYWRIGHT_FALLBACK:
                 LOGGER.warning(
                     "Received 403 from httpx for %s on attempt %s/%s. Trying Playwright session.",
-                    sport.slug,
+                    label,
                     attempt,
                     MAX_RETRIES,
                 )
@@ -293,32 +378,28 @@ def fetch_live_matches(client: httpx.Client, sport: SportDefinition) -> dict[str
                 HTTPX_BLOCKED = True
                 LOGGER.warning(
                     "httpx remains blocked for %s. Switching to Playwright navigation.",
-                    sport.slug,
+                    label,
                 )
-                return fetch_with_playwright_direct(sport)
+                return fetch_with_playwright_direct(url, label)
 
             LOGGER.warning(
                 "Unexpected status code %s for %s on attempt %s/%s.",
                 response.status_code,
-                sport.slug,
+                label,
                 attempt,
                 MAX_RETRIES,
             )
         except httpx.HTTPError as error:
             LOGGER.error(
                 "HTTP error for %s on attempt %s/%s: %s",
-                sport.slug,
+                label,
                 attempt,
                 MAX_RETRIES,
                 error,
             )
 
         if attempt < MAX_RETRIES:
-            LOGGER.info(
-                "Retrying %s in %.1f seconds.",
-                sport.slug,
-                backoff_seconds,
-            )
+            LOGGER.info("Retrying %s in %.1f seconds.", label, backoff_seconds)
             time.sleep(backoff_seconds)
             backoff_seconds *= 2
 
@@ -326,39 +407,63 @@ def fetch_live_matches(client: httpx.Client, sport: SportDefinition) -> dict[str
         HTTPX_BLOCKED = True
         LOGGER.warning(
             "httpx retries exhausted for %s. Escalating to direct Playwright request.",
-            sport.slug,
+            label,
         )
-        return fetch_with_playwright_direct(sport)
+        return fetch_with_playwright_direct(url, label)
 
-    raise RuntimeError(f"Failed to fetch live matches for {sport.slug}.")
+    raise RuntimeError(f"Failed to fetch JSON for {label}.")
 
 
-def extract_competitors(
-    event: dict[str, Any],
-) -> tuple[int | None, str, int | None, str]:
-    home_team = event.get("homeTeam") or event.get("homeCompetitor") or {}
-    away_team = event.get("awayTeam") or event.get("awayCompetitor") or {}
+def extract_competitor(
+    participant: dict[str, Any] | None,
+    fallback_name: str,
+) -> ParsedCompetitor:
+    participant = participant or {}
+    country = participant.get("country") or {}
+
+    return ParsedCompetitor(
+        competitor_id=coerce_optional_int(participant.get("id")),
+        name=participant.get("name") or fallback_name,
+        short_name=participant.get("shortName"),
+        country=country.get("name"),
+        is_individual=bool(participant.get("playerTeamInfo"))
+        or participant.get("type") == 1,
+    )
+
+
+def extract_competitors(event: dict[str, Any]) -> tuple[ParsedCompetitor, ParsedCompetitor]:
+    home_team = event.get("homeTeam") or event.get("homeCompetitor")
+    away_team = event.get("awayTeam") or event.get("awayCompetitor")
 
     if home_team or away_team:
         return (
-            home_team.get("id"),
-            home_team.get("name", "Home"),
-            away_team.get("id"),
-            away_team.get("name", "Away"),
+            extract_competitor(home_team, "Home"),
+            extract_competitor(away_team, "Away"),
         )
 
     participants = event.get("participants") or event.get("competitors") or []
     if len(participants) >= 2:
-        first = participants[0] or {}
-        second = participants[1] or {}
         return (
-            first.get("id"),
-            first.get("name", "Home"),
-            second.get("id"),
-            second.get("name", "Away"),
+            extract_competitor(participants[0], "Home"),
+            extract_competitor(participants[1], "Away"),
         )
 
-    return (None, "Home", None, event.get("name", "Away"))
+    return (
+        ParsedCompetitor(
+            competitor_id=None,
+            name="Home",
+            short_name=None,
+            country=None,
+            is_individual=False,
+        ),
+        ParsedCompetitor(
+            competitor_id=None,
+            name=event.get("name") or "Away",
+            short_name=None,
+            country=None,
+            is_individual=False,
+        ),
+    )
 
 
 def extract_scores(event: dict[str, Any]) -> tuple[int, int]:
@@ -377,53 +482,60 @@ def extract_scores(event: dict[str, Any]) -> tuple[int, int]:
     return 0, 0
 
 
-def parse_matches(
-    payload: dict[str, Any], sport: SportDefinition
-) -> list[LiveMatch]:
-    matches: list[LiveMatch] = []
+def extract_venue(event: dict[str, Any]) -> str | None:
+    venue = event.get("venue") or {}
+    stadium = venue.get("stadium") or {}
+    return venue.get("name") or stadium.get("name")
+
+
+def parse_events(payload: dict[str, Any], sport: SportDefinition) -> list[ParsedEvent]:
+    parsed_events: list[ParsedEvent] = []
 
     for event in payload.get("events", []):
         tournament = event.get("tournament") or {}
         unique_tournament = tournament.get("uniqueTournament") or {}
         category = tournament.get("category") or {}
         season = event.get("season") or {}
-        home_team_id, home_team, away_team_id, away_team = extract_competitors(event)
+        home, away = extract_competitors(event)
         home_score, away_score = extract_scores(event)
 
-        matches.append(
-            LiveMatch(
+        match_id = coerce_int(event.get("id"))
+        if not match_id:
+            continue
+
+        parsed_events.append(
+            ParsedEvent(
                 sport_slug=sport.slug,
                 sport_name=sport.name,
-                match_id=int(event.get("id", 0)),
-                tournament_id=unique_tournament.get("id") or tournament.get("id"),
+                match_id=match_id,
+                tournament_id=coerce_optional_int(
+                    unique_tournament.get("id") or tournament.get("id")
+                ),
                 tournament_name=unique_tournament.get("name")
                 or tournament.get("name")
                 or "Unknown tournament",
-                country_name=category.get("name"),
+                country_name=category.get("name")
+                or (category.get("country") or {}).get("name"),
+                season_id=coerce_optional_int(season.get("id")),
                 season_name=season.get("name"),
-                home_team_id=home_team_id,
-                home_team=home_team,
-                away_team_id=away_team_id,
-                away_team=away_team,
+                home=home,
+                away=away,
                 home_score=home_score,
                 away_score=away_score,
                 match_status=(event.get("status") or {}).get("description", "Unknown"),
-                match_minute=compute_match_minute(event),
-                start_timestamp=event.get("startTimestamp"),
+                match_minute=compute_match_minute(event, sport.slug),
+                start_timestamp=coerce_optional_int(event.get("startTimestamp")),
+                venue=extract_venue(event),
             )
         )
 
-    return matches
+    return parsed_events
 
 
-def format_match(match: LiveMatch) -> str:
-    time_suffix = (
-        f"{match.match_minute}'" if match.match_minute is not None else match.match_status
-    )
-    return (
-        f"[{match.sport_name}] {match.home_team} {match.home_score} - "
-        f"{match.away_score} {match.away_team} ({time_suffix})"
-    )
+def iso_from_timestamp(timestamp: int | None) -> str | None:
+    if not timestamp:
+        return None
+    return datetime.fromtimestamp(timestamp, tz=UTC).isoformat()
 
 
 def emit_line(message: str) -> None:
@@ -431,35 +543,454 @@ def emit_line(message: str) -> None:
     sys.stdout.flush()
 
 
+def format_match(match: dict[str, Any]) -> str:
+    minute = match["minute"]
+    time_display = f"{minute}'" if minute is not None else match["status"]
+    return (
+        f"[{match['sport_name']}] {match['home_team']} {match['home_score']} - "
+        f"{match['away_score']} {match['away_team']} ({time_display})"
+    )
+
+
+def queue_team_refresh(state: StructuredState, sport_slug: str, team_id: int | None) -> None:
+    if team_id is None:
+        return
+
+    key = (sport_slug, team_id)
+    refreshed_at = state.team_refreshed_at.get(key)
+    if refreshed_at and (time.monotonic() - refreshed_at) < TEAM_REFRESH_INTERVAL_SECONDS:
+        return
+
+    if key not in state.pending_team_set:
+        state.pending_team_set.add(key)
+        state.pending_team_keys.append(key)
+
+
+def queue_standings_refresh(
+    state: StructuredState,
+    sport_slug: str,
+    tournament_id: int | None,
+    season_id: int | None,
+) -> None:
+    if tournament_id is None or season_id is None:
+        return
+
+    key = (sport_slug, tournament_id, season_id)
+    refreshed_at = state.standings_refreshed_at.get(key)
+    if refreshed_at and (
+        time.monotonic() - refreshed_at
+    ) < STANDINGS_REFRESH_INTERVAL_SECONDS:
+        return
+
+    if key not in state.pending_standings_set:
+        state.pending_standings_set.add(key)
+        state.pending_standings_keys.append(key)
+
+
+def upsert_individual_player(
+    state: StructuredState,
+    sport: SportDefinition,
+    competitor: ParsedCompetitor,
+) -> None:
+    if competitor.competitor_id is None:
+        return
+
+    team_source_id = f"{sport.slug}:{competitor.competitor_id}"
+    player_source_id = f"{sport.slug}:player:{competitor.competitor_id}"
+
+    state.players[player_source_id] = {
+        "id": competitor.competitor_id,
+        "source_id": player_source_id,
+        "team_id": competitor.competitor_id,
+        "team_source_id": team_source_id,
+        "name": competitor.name,
+        "position": None,
+        "age": None,
+        "nationality": competitor.country,
+        "photo_url": None,
+        "team": competitor.name,
+        "sport_slug": sport.slug,
+        "sport_name": sport.name,
+    }
+
+
+def record_event(
+    state: StructuredState,
+    sport: SportDefinition,
+    event: ParsedEvent,
+    is_live: bool,
+) -> None:
+    league_id = event.tournament_id or event.match_id
+    league_source_id = f"{sport.slug}:{league_id}"
+    season_name = event.season_name or datetime.now(UTC).strftime("%Y")
+
+    state.leagues[league_source_id] = {
+        "id": league_id,
+        "source_id": league_source_id,
+        "sport_slug": sport.slug,
+        "sport_name": sport.name,
+        "name": event.tournament_name,
+        "country": event.country_name,
+        "season": season_name,
+        "logo_url": None,
+    }
+
+    for competitor in (event.home, event.away):
+        if competitor.competitor_id is None:
+            continue
+
+        team_source_id = f"{sport.slug}:{competitor.competitor_id}"
+        state.teams[team_source_id] = {
+            "id": competitor.competitor_id,
+            "source_id": team_source_id,
+            "league_id": league_id,
+            "league_source_id": league_source_id,
+            "name": competitor.name,
+            "short_name": competitor.short_name,
+            "country": competitor.country,
+            "founded": None,
+            "venue": None,
+            "logo_url": None,
+            "league": event.tournament_name,
+            "sport_slug": sport.slug,
+            "sport_name": sport.name,
+        }
+
+        if competitor.is_individual:
+            upsert_individual_player(state, sport, competitor)
+        elif sport.slug != "esports":
+            queue_team_refresh(state, sport.slug, competitor.competitor_id)
+
+    fixture_source_id = f"{sport.slug}:{event.match_id}"
+    fixture_row = {
+        "match_id": event.match_id,
+        "source_id": fixture_source_id,
+        "league_id": league_id,
+        "league_source_id": league_source_id,
+        "sport_slug": sport.slug,
+        "sport_name": sport.name,
+        "league": event.tournament_name,
+        "country": event.country_name,
+        "season": season_name,
+        "home_team_id": event.home.competitor_id,
+        "home_team_source_id": (
+            f"{sport.slug}:{event.home.competitor_id}"
+            if event.home.competitor_id is not None
+            else None
+        ),
+        "away_team_id": event.away.competitor_id,
+        "away_team_source_id": (
+            f"{sport.slug}:{event.away.competitor_id}"
+            if event.away.competitor_id is not None
+            else None
+        ),
+        "home_team": event.home.name,
+        "away_team": event.away.name,
+        "home_score": event.home_score,
+        "away_score": event.away_score,
+        "score": f"{event.home_score}-{event.away_score}",
+        "minute": event.match_minute,
+        "status": event.match_status,
+        "starts_at": iso_from_timestamp(event.start_timestamp),
+        "venue": event.venue,
+    }
+    state.fixtures[fixture_source_id] = fixture_row
+
+    if is_live:
+        sport_live_matches = state.live_matches.setdefault(sport.slug, {})
+        sport_live_matches[event.match_id] = {
+            key: fixture_row[key]
+            for key in (
+                "sport_slug",
+                "sport_name",
+                "match_id",
+                "league",
+                "country",
+                "season",
+                "home_team",
+                "away_team",
+                "home_score",
+                "away_score",
+                "score",
+                "minute",
+                "status",
+                "starts_at",
+            )
+        }
+
+    queue_standings_refresh(state, sport.slug, event.tournament_id, event.season_id)
+
+
+def merge_events(primary: list[ParsedEvent], secondary: list[ParsedEvent]) -> list[ParsedEvent]:
+    merged: dict[int, ParsedEvent] = {}
+    for event in secondary:
+        merged[event.match_id] = event
+    for event in primary:
+        merged[event.match_id] = event
+    return list(merged.values())
+
+
+def sync_sport_events(
+    client: httpx.Client,
+    state: StructuredState,
+    sport: SportDefinition,
+) -> None:
+    live_payload = fetch_json(client, build_live_url(sport), f"{sport.slug} live")
+    scheduled_payload = fetch_json(
+        client,
+        build_scheduled_url(sport, datetime.now(UTC).date()),
+        f"{sport.slug} scheduled",
+    )
+
+    live_events = parse_events(live_payload, sport)
+    scheduled_events = parse_events(scheduled_payload, sport)
+    combined_events = merge_events(live_events, scheduled_events)
+    live_match_ids = {event.match_id for event in live_events}
+
+    state.live_matches[sport.slug] = {}
+    for event in combined_events:
+        record_event(
+            state,
+            sport,
+            event,
+            is_live=event.match_id in live_match_ids,
+        )
+
+    state.sport_updated_at[sport.slug] = datetime.now(UTC).isoformat()
+
+    if not live_events:
+        LOGGER.info("No live events returned for %s.", sport.slug)
+    else:
+        LOGGER.info("Fetched %s live events for %s.", len(live_events), sport.slug)
+        for match in state.live_matches.get(sport.slug, {}).values():
+            emit_line(format_match(match))
+
+    if scheduled_events:
+        LOGGER.info(
+            "Captured %s structured fixtures for %s.",
+            len(combined_events),
+            sport.slug,
+        )
+
+
+def extract_player_position(player: dict[str, Any]) -> str | None:
+    position = player.get("position")
+    if isinstance(position, str):
+        return position
+    if isinstance(position, dict):
+        return position.get("name") or position.get("shortName")
+
+    primary_position = player.get("primaryPosition")
+    if isinstance(primary_position, str):
+        return primary_position
+    if isinstance(primary_position, dict):
+        return primary_position.get("name") or primary_position.get("shortName")
+
+    return None
+
+
+def upsert_roster_player(
+    state: StructuredState,
+    sport_slug: str,
+    team_id: int,
+    player: dict[str, Any],
+) -> None:
+    player_id = coerce_optional_int(player.get("id"))
+    player_name = player.get("name")
+    if not player_name:
+        return
+
+    team_source_id = f"{sport_slug}:{team_id}"
+    team_row = state.teams.get(team_source_id)
+    sport_name = (
+        team_row["sport_name"]
+        if team_row
+        else sport_slug.replace("-", " ").title()
+    )
+
+    if player_id is not None:
+        player_source_id = f"{sport_slug}:player:{player_id}"
+    else:
+        player_source_id = f"{sport_slug}:player:{team_id}:{player_name.lower()}"
+
+    nationality = (player.get("country") or {}).get("name")
+
+    state.players[player_source_id] = {
+        "id": player_id or abs(hash(player_source_id)) % 2_000_000_000,
+        "source_id": player_source_id,
+        "team_id": team_id,
+        "team_source_id": team_source_id,
+        "name": player_name,
+        "position": extract_player_position(player),
+        "age": compute_age(player.get("dateOfBirthTimestamp")),
+        "nationality": nationality,
+        "photo_url": None,
+        "team": team_row["name"] if team_row else None,
+        "sport_slug": sport_slug,
+        "sport_name": sport_name,
+    }
+
+
+def enrich_team_rosters(client: httpx.Client, state: StructuredState) -> None:
+    processed = 0
+
+    while state.pending_team_keys and processed < MAX_TEAM_ENRICHMENTS_PER_CYCLE:
+        sport_slug, team_id = state.pending_team_keys.popleft()
+        state.pending_team_set.discard((sport_slug, team_id))
+        state.team_refreshed_at[(sport_slug, team_id)] = time.monotonic()
+
+        try:
+            payload = fetch_json(
+                client,
+                build_team_players_url(team_id),
+                f"{sport_slug} team {team_id} players",
+            )
+            for item in payload.get("players", []):
+                player = item.get("player") or item
+                if isinstance(player, dict):
+                    upsert_roster_player(state, sport_slug, team_id, player)
+
+            processed += 1
+        except Exception as error:  # noqa: BLE001
+            LOGGER.warning(
+                "Roster enrichment failed for %s team %s: %s",
+                sport_slug,
+                team_id,
+                error,
+            )
+        finally:
+            processed += 1
+
+
+def upsert_standing_row(
+    state: StructuredState,
+    sport_slug: str,
+    tournament_id: int,
+    row: dict[str, Any],
+) -> None:
+    league_source_id = f"{sport_slug}:{tournament_id}"
+    league = state.leagues.get(league_source_id)
+    team = row.get("team") or {}
+    team_id = coerce_optional_int(team.get("id"))
+    team_source_id = f"{sport_slug}:{team_id}" if team_id is not None else None
+
+    if team_id is not None and team_source_id not in state.teams:
+        sport_name = (
+            league["sport_name"]
+            if league
+            else sport_slug.replace("-", " ").title()
+        )
+        state.teams[team_source_id] = {
+            "id": team_id,
+            "source_id": team_source_id,
+            "league_id": tournament_id,
+            "league_source_id": league_source_id,
+            "name": team.get("name") or "Unknown",
+            "short_name": team.get("shortName"),
+            "country": (team.get("country") or {}).get("name"),
+            "founded": None,
+            "venue": None,
+            "logo_url": None,
+            "league": league["name"] if league else None,
+            "sport_slug": sport_slug,
+            "sport_name": sport_name,
+        }
+
+    points = row.get("points")
+    if points is None:
+        points = row.get("score")
+    if points is None:
+        points = row.get("wins")
+
+    standing_key = f"{sport_slug}:{tournament_id}:{team_id or row.get('position')}"
+    state.standings[standing_key] = {
+        "league_id": tournament_id,
+        "league_source_id": league_source_id,
+        "team_id": team_id,
+        "team_source_id": team_source_id,
+        "sport_slug": sport_slug,
+        "sport_name": (
+            league["sport_name"]
+            if league
+            else sport_slug.replace("-", " ").title()
+        ),
+        "position": coerce_int(row.get("position")),
+        "team": team.get("name") or "Unknown",
+        "played": coerce_int(row.get("matches") or row.get("played")),
+        "wins": coerce_int(row.get("wins")),
+        "draws": coerce_int(row.get("draws")),
+        "losses": coerce_int(row.get("losses")),
+        "goals_for": coerce_int(row.get("scoresFor") or row.get("goalsFor")),
+        "goals_against": coerce_int(
+            row.get("scoresAgainst") or row.get("goalsAgainst")
+        ),
+        "points": coerce_int(points),
+        "form": str(row.get("form") or row.get("streak") or ""),
+        "league": league["name"] if league else "Unknown",
+    }
+
+
+def enrich_league_standings(client: httpx.Client, state: StructuredState) -> None:
+    processed = 0
+
+    while (
+        state.pending_standings_keys
+        and processed < MAX_STANDINGS_ENRICHMENTS_PER_CYCLE
+    ):
+        sport_slug, tournament_id, season_id = state.pending_standings_keys.popleft()
+        state.pending_standings_set.discard((sport_slug, tournament_id, season_id))
+        state.standings_refreshed_at[(sport_slug, tournament_id, season_id)] = (
+            time.monotonic()
+        )
+
+        try:
+            payload = fetch_json(
+                client,
+                build_standings_url(tournament_id, season_id),
+                f"{sport_slug} standings {tournament_id}/{season_id}",
+            )
+            for standing_group in payload.get("standings", []):
+                for row in standing_group.get("rows", []):
+                    if isinstance(row, dict):
+                        upsert_standing_row(state, sport_slug, tournament_id, row)
+            processed += 1
+        except Exception as error:  # noqa: BLE001
+            LOGGER.warning(
+                "Standings enrichment failed for %s tournament %s season %s: %s",
+                sport_slug,
+                tournament_id,
+                season_id,
+                error,
+            )
+        finally:
+            processed += 1
+
+
 def persist_live_snapshot(
     selected_sports: list[SportDefinition],
-    sport_matches: dict[str, list[LiveMatch]],
-    sport_updated_at: dict[str, str],
+    state: StructuredState,
 ) -> None:
     matches = [
-        {
-            "sport_slug": match.sport_slug,
-            "sport_name": match.sport_name,
-            "match_id": match.match_id,
-            "league": match.tournament_name,
-            "country": match.country_name,
-            "season": match.season_name,
-            "home_team": match.home_team,
-            "away_team": match.away_team,
-            "home_score": match.home_score,
-            "away_score": match.away_score,
-            "score": f"{match.home_score}-{match.away_score}",
-            "minute": match.match_minute,
-            "status": match.match_status,
-            "starts_at": (
-                datetime.fromtimestamp(match.start_timestamp, tz=UTC).isoformat()
-                if match.start_timestamp
-                else None
-            ),
-        }
+        match
         for sport in selected_sports
-        for match in sport_matches.get(sport.slug, [])
+        for match in state.live_matches.get(sport.slug, {}).values()
     ]
+    matches.sort(key=lambda match: match.get("starts_at") or "", reverse=False)
+
+    leagues = list(state.leagues.values())
+    leagues.sort(key=lambda row: (row["sport_name"], row["name"]))
+
+    teams = list(state.teams.values())
+    teams.sort(key=lambda row: (row["sport_name"], row["name"]))
+
+    players = list(state.players.values())
+    players.sort(key=lambda row: (row["sport_name"], row["name"]))
+
+    fixtures = list(state.fixtures.values())
+    fixtures.sort(key=lambda row: row.get("starts_at") or "", reverse=True)
+
+    standings = list(state.standings.values())
+    standings.sort(key=lambda row: (row["league"], row["position"], row["team"]))
 
     snapshot = {
         "updated_at": datetime.now(UTC).isoformat(),
@@ -468,13 +999,25 @@ def persist_live_snapshot(
             {
                 "slug": sport.slug,
                 "name": sport.name,
-                "live_count": len(sport_matches.get(sport.slug, [])),
-                "updated_at": sport_updated_at.get(sport.slug),
+                "live_count": len(state.live_matches.get(sport.slug, {})),
+                "updated_at": state.sport_updated_at.get(sport.slug),
                 "endpoint": build_live_url(sport),
             }
             for sport in selected_sports
         ],
         "matches": matches,
+        "leagues": leagues,
+        "teams": teams,
+        "players": players,
+        "fixtures": fixtures,
+        "standings": standings,
+        "structured_counts": {
+            "leagues": len(leagues),
+            "teams": len(teams),
+            "players": len(players),
+            "fixtures": len(fixtures),
+            "standings": len(standings),
+        },
     }
 
     LIVE_SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -486,7 +1029,7 @@ def persist_live_snapshot(
     temp_path.replace(LIVE_SNAPSHOT_PATH)
 
 
-def persist_matches(matches: list[LiveMatch]) -> None:
+def persist_snapshot_to_database(state: StructuredState) -> None:
     if not DATABASE_URL or DATABASE_URL.startswith("memory://"):
         return
 
@@ -498,74 +1041,130 @@ def persist_matches(matches: list[LiveMatch]) -> None:
 
     with psycopg.connect(DATABASE_URL) as connection:
         with connection.cursor() as cursor:
-            for match in matches:
-                if (
-                    not match.tournament_id
-                    or not match.home_team_id
-                    or not match.away_team_id
-                    or not match.start_timestamp
-                ):
-                    continue
-
-                league_source_id = f"{match.sport_slug}:{match.tournament_id}"
-                home_source_id = f"{match.sport_slug}:{match.home_team_id}"
-                away_source_id = f"{match.sport_slug}:{match.away_team_id}"
-                fixture_source_id = f"{match.sport_slug}:{match.match_id}"
-
+            league_db_ids: dict[str, int] = {}
+            for league in state.leagues.values():
                 cursor.execute(
                     """
-                    insert into leagues (source_id, sport_slug, sport_name, name, country, season)
-                    values (%s, %s, %s, %s, %s, %s)
+                    insert into leagues (
+                      source_id,
+                      sport_slug,
+                      sport_name,
+                      name,
+                      country,
+                      logo_url,
+                      season
+                    )
+                    values (%s, %s, %s, %s, %s, %s, %s)
                     on conflict (source_id) do update
                     set
                       sport_slug = excluded.sport_slug,
                       sport_name = excluded.sport_name,
                       name = excluded.name,
-                      country = coalesce(excluded.country, leagues.country),
-                      season = coalesce(excluded.season, leagues.season),
+                      country = excluded.country,
+                      logo_url = excluded.logo_url,
+                      season = excluded.season,
                       updated_at = now()
                     returning id
                     """,
                     (
-                        league_source_id,
-                        match.sport_slug,
-                        match.sport_name,
-                        match.tournament_name,
-                        match.country_name,
-                        match.season_name or "Live",
+                        league["source_id"],
+                        league["sport_slug"],
+                        league["sport_name"],
+                        league["name"],
+                        league["country"],
+                        league["logo_url"],
+                        league["season"],
                     ),
                 )
-                league_id = cursor.fetchone()[0]
+                league_db_ids[league["source_id"]] = cursor.fetchone()[0]
 
+            team_db_ids: dict[str, int] = {}
+            for team in state.teams.values():
                 cursor.execute(
                     """
-                    insert into teams (source_id, league_id, name)
-                    values (%s, %s, %s)
+                    insert into teams (
+                      source_id,
+                      league_id,
+                      name,
+                      short_name,
+                      country,
+                      founded,
+                      venue,
+                      logo_url
+                    )
+                    values (%s, %s, %s, %s, %s, %s, %s, %s)
                     on conflict (source_id) do update
                     set
                       league_id = excluded.league_id,
                       name = excluded.name,
+                      short_name = excluded.short_name,
+                      country = excluded.country,
+                      founded = excluded.founded,
+                      venue = excluded.venue,
+                      logo_url = excluded.logo_url,
                       updated_at = now()
                     returning id
                     """,
-                    (home_source_id, league_id, match.home_team),
+                    (
+                        team["source_id"],
+                        league_db_ids.get(team["league_source_id"]),
+                        team["name"],
+                        team["short_name"],
+                        team["country"],
+                        team["founded"],
+                        team["venue"],
+                        team["logo_url"],
+                    ),
                 )
-                home_db_id = cursor.fetchone()[0]
+                team_db_ids[team["source_id"]] = cursor.fetchone()[0]
 
+            for player in state.players.values():
                 cursor.execute(
                     """
-                    insert into teams (source_id, league_id, name)
-                    values (%s, %s, %s)
+                    insert into players (
+                      source_id,
+                      team_id,
+                      name,
+                      position,
+                      age,
+                      nationality,
+                      photo_url
+                    )
+                    values (%s, %s, %s, %s, %s, %s, %s)
                     on conflict (source_id) do update
                     set
-                      league_id = excluded.league_id,
+                      team_id = excluded.team_id,
                       name = excluded.name,
+                      position = excluded.position,
+                      age = excluded.age,
+                      nationality = excluded.nationality,
+                      photo_url = excluded.photo_url,
                       updated_at = now()
-                    returning id
                     """,
-                    (away_source_id, league_id, match.away_team),
+                    (
+                        player["source_id"],
+                        team_db_ids.get(player["team_source_id"]),
+                        player["name"],
+                        player["position"],
+                        player["age"],
+                        player["nationality"],
+                        player["photo_url"],
+                    ),
                 )
-                away_db_id = cursor.fetchone()[0]
+
+            for fixture in state.fixtures.values():
+                league_db_id = league_db_ids.get(fixture["league_source_id"])
+                home_team_db_id = team_db_ids.get(fixture["home_team_source_id"])
+                away_team_db_id = team_db_ids.get(fixture["away_team_source_id"])
+
+                if not league_db_id or not home_team_db_id or not away_team_db_id:
+                    continue
+
+                starts_at = (
+                    datetime.fromisoformat(fixture["starts_at"])
+                    if fixture["starts_at"]
+                    else datetime.now(UTC)
+                )
 
                 cursor.execute(
                     """
@@ -578,9 +1177,10 @@ def persist_matches(matches: list[LiveMatch]) -> None:
                       status,
                       minute,
                       home_score,
-                      away_score
+                      away_score,
+                      venue
                     )
-                    values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     on conflict (source_id) do update
                     set
                       league_id = excluded.league_id,
@@ -591,35 +1191,99 @@ def persist_matches(matches: list[LiveMatch]) -> None:
                       minute = excluded.minute,
                       home_score = excluded.home_score,
                       away_score = excluded.away_score,
+                      venue = excluded.venue,
                       updated_at = now()
                     """,
                     (
-                        fixture_source_id,
-                        league_id,
-                        home_db_id,
-                        away_db_id,
-                        datetime.fromtimestamp(match.start_timestamp, tz=UTC),
-                        match.match_status,
-                        match.match_minute or 0,
-                        match.home_score,
-                        match.away_score,
+                        fixture["source_id"],
+                        league_db_id,
+                        home_team_db_id,
+                        away_team_db_id,
+                        starts_at,
+                        fixture["status"],
+                        fixture["minute"] or 0,
+                        fixture["home_score"],
+                        fixture["away_score"],
+                        fixture["venue"],
                     ),
                 )
+
+            standings_by_league: dict[str, list[dict[str, Any]]] = {}
+            for standing in state.standings.values():
+                standings_by_league.setdefault(standing["league_source_id"], []).append(
+                    standing
+                )
+
+            for league_source_id, rows in standings_by_league.items():
+                league_db_id = league_db_ids.get(league_source_id)
+                if not league_db_id:
+                    continue
+
+                cursor.execute(
+                    "delete from standings where league_id = %s",
+                    (league_db_id,),
+                )
+
+                for standing in rows:
+                    team_db_id = team_db_ids.get(standing["team_source_id"])
+                    if not team_db_id:
+                        continue
+
+                    cursor.execute(
+                        """
+                        insert into standings (
+                          league_id,
+                          team_id,
+                          position,
+                          played,
+                          wins,
+                          draws,
+                          losses,
+                          goals_for,
+                          goals_against,
+                          points,
+                          form
+                        )
+                        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        on conflict (league_id, team_id) do update
+                        set
+                          position = excluded.position,
+                          played = excluded.played,
+                          wins = excluded.wins,
+                          draws = excluded.draws,
+                          losses = excluded.losses,
+                          goals_for = excluded.goals_for,
+                          goals_against = excluded.goals_against,
+                          points = excluded.points,
+                          form = excluded.form,
+                          updated_at = now()
+                        """,
+                        (
+                            league_db_id,
+                            team_db_id,
+                            standing["position"],
+                            standing["played"],
+                            standing["wins"],
+                            standing["draws"],
+                            standing["losses"],
+                            standing["goals_for"],
+                            standing["goals_against"],
+                            standing["points"],
+                            standing["form"],
+                        ),
+                    )
 
         connection.commit()
 
 
 def run_scraper() -> None:
     selected_sports = resolve_selected_sports()
+    state = StructuredState()
+
     LOGGER.info(
-        "Starting SofaScore live scraper for sports: %s",
+        "Starting SofaScore structured scraper for sports: %s",
         ", ".join(sport.slug for sport in selected_sports),
     )
-
-    sport_matches: dict[str, list[LiveMatch]] = {
-        sport.slug: [] for sport in selected_sports
-    }
-    sport_updated_at: dict[str, str] = {}
 
     with httpx.Client(
         http2=True,
@@ -632,29 +1296,22 @@ def run_scraper() -> None:
 
             for sport in selected_sports:
                 try:
-                    payload = fetch_live_matches(client, sport)
-                    matches = parse_matches(payload, sport)
-                    sport_matches[sport.slug] = matches
-                    sport_updated_at[sport.slug] = datetime.now(UTC).isoformat()
-                    persist_live_snapshot(selected_sports, sport_matches, sport_updated_at)
-                    persist_matches(matches)
-
-                    if not matches:
-                        LOGGER.info("No live events returned for %s.", sport.slug)
-                    else:
-                        LOGGER.info(
-                            "Fetched %s live events for %s.",
-                            len(matches),
-                            sport.slug,
-                        )
-                        for match in matches:
-                            emit_line(format_match(match))
+                    sync_sport_events(client, state, sport)
+                    persist_live_snapshot(selected_sports, state)
                 except Exception as error:  # noqa: BLE001
                     LOGGER.exception(
                         "Scraper cycle failed for %s: %s",
                         sport.slug,
                         error,
                     )
+
+            try:
+                enrich_league_standings(client, state)
+                enrich_team_rosters(client, state)
+                persist_live_snapshot(selected_sports, state)
+                persist_snapshot_to_database(state)
+            except Exception as error:  # noqa: BLE001
+                LOGGER.exception("Structured persistence failed: %s", error)
 
             elapsed = time.monotonic() - cycle_started_at
             sleep_seconds = max(0.0, FETCH_INTERVAL_SECONDS - elapsed)

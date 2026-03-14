@@ -6,13 +6,13 @@ on conflict (id) do nothing;
 
 insert into teams (id, source_id, league_id, name, short_name, country, founded, venue, logo_url)
 values
-  (1, '133602', 1, 'Liverpool', 'LIV', 'England', 1892, 'Anfield', null),
-  (2, '133610', 1, 'Chelsea', 'CHE', 'England', 1905, 'Stamford Bridge', null),
-  (3, '133604', 1, 'Arsenal', 'ARS', 'England', 1886, 'Emirates Stadium', null),
-  (4, '133613', 1, 'Manchester City', 'MCI', 'England', 1880, 'Etihad Stadium', null),
-  (5, '133738', 2, 'Real Madrid', 'RMA', 'Spain', 1902, 'Santiago Bernabeu', null),
-  (6, '133739', 2, 'Barcelona', 'BAR', 'Spain', 1899, 'Estadi Olimpic Lluis Companys', null),
-  (7, '133729', 2, 'Atletico Madrid', 'ATM', 'Spain', 1903, 'Metropolitano Stadium', null)
+  (1, 'football:133602', 1, 'Liverpool', 'LIV', 'England', 1892, 'Anfield', null),
+  (2, 'football:133610', 1, 'Chelsea', 'CHE', 'England', 1905, 'Stamford Bridge', null),
+  (3, 'football:133604', 1, 'Arsenal', 'ARS', 'England', 1886, 'Emirates Stadium', null),
+  (4, 'football:133613', 1, 'Manchester City', 'MCI', 'England', 1880, 'Etihad Stadium', null),
+  (5, 'football:133738', 2, 'Real Madrid', 'RMA', 'Spain', 1902, 'Santiago Bernabeu', null),
+  (6, 'football:133739', 2, 'Barcelona', 'BAR', 'Spain', 1899, 'Estadi Olimpic Lluis Companys', null),
+  (7, 'football:133729', 2, 'Atletico Madrid', 'ATM', 'Spain', 1903, 'Metropolitano Stadium', null)
 on conflict (id) do nothing;
 
 insert into players (id, team_id, name, position, age, nationality, photo_url)
@@ -47,10 +47,10 @@ insert into fixtures (
   venue
 )
 values
-  (1001, '900001', 1, 1, 2, now() - interval '67 minutes', '2H', 67, 2, 1, 'Anfield'),
-  (1002, '900002', 1, 3, 4, now() + interval '1 day 2 hours', 'NS', 0, 0, 0, 'Emirates Stadium'),
-  (1003, '900003', 2, 5, 6, now() - interval '7 days', 'FT', 90, 3, 2, 'Santiago Bernabeu'),
-  (1004, '900004', 2, 6, 7, now() + interval '3 days', 'NS', 0, 0, 0, 'Estadi Olimpic Lluis Companys')
+  (1001, 'football:900001', 1, 1, 2, now() - interval '67 minutes', '2H', 67, 2, 1, 'Anfield'),
+  (1002, 'football:900002', 1, 3, 4, now() + interval '1 day 2 hours', 'NS', 0, 0, 0, 'Emirates Stadium'),
+  (1003, 'football:900003', 2, 5, 6, now() - interval '7 days', 'FT', 90, 3, 2, 'Santiago Bernabeu'),
+  (1004, 'football:900004', 2, 6, 7, now() + interval '3 days', 'NS', 0, 0, 0, 'Estadi Olimpic Lluis Companys')
 on conflict (id) do nothing;
 
 insert into events (fixture_id, team_id, player_id, event_type, minute, description)
