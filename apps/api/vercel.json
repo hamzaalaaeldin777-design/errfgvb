@@ -1,7 +1,23 @@
 {
   "rewrites": [
     {
-      "source": "/(.*)",
+      "source": "/api/:path*",
+      "destination": "/api"
+    },
+    {
+      "source": "/auth/:path*",
+      "destination": "/api"
+    },
+    {
+      "source": "/dashboard/:path*",
+      "destination": "/api"
+    },
+    {
+      "source": "/admin/:path*",
+      "destination": "/api"
+    },
+    {
+      "source": "/health",
       "destination": "/api"
     }
   ]

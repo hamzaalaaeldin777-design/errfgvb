@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SportStack API</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: system-ui, sans-serif;
+        background: #0b1020;
+        color: #e5eefc;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background:
+          radial-gradient(circle at top, rgba(75, 119, 255, 0.25), transparent 35%),
+          linear-gradient(180deg, #0b1020, #060812);
+      }
+
+      main {
+        width: min(680px, calc(100vw - 32px));
+        padding: 32px;
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        border-radius: 24px;
+        background: rgba(10, 15, 30, 0.88);
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+      }
+
+      h1 {
+        margin: 0 0 12px;
+        font-size: clamp(2rem, 5vw, 3rem);
+      }
+
+      p {
+        margin: 0 0 16px;
+        line-height: 1.6;
+        color: #b8c6e3;
+      }
+
+      code {
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: rgba(96, 165, 250, 0.15);
+        color: #dbeafe;
+      }
+
+      a {
+        color: #8ec5ff;
+        text-decoration: none;
+      }
+
+      ul {
+        margin: 20px 0 0;
+        padding-left: 20px;
+        color: #d6e2f5;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>SportStack API</h1>
+      <p>This domain hosts the API service. Use an API key with the protected routes.</p>
+      <p>Health check: <a href="/health"><code>/health</code></a></p>
+      <p>Example endpoint: <code>/api/leagues</code> with <code>x-api-key</code></p>
+      <ul>
+        <li>Web app lives on the separate Vercel frontend project.</li>
+        <li>Protected routes are served from the Express app.</li>
+        <li>Root exists only as a simple landing page for the API domain.</li>
+      </ul>
+    </main>
+  </body>
+</html>
